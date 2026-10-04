@@ -1,0 +1,13 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "build",
+        "-f",
+        "apps/api/Dockerfile",
+        "-t",
+        "asia-east1-docker.pkg.dev/tms-system-501704/tms-repo/tms-api:latest",
+        ".",
+      ]
+images:
+  - "asia-east1-docker.pkg.dev/tms-system-501704/tms-repo/tms-api:latest"

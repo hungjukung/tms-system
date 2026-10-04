@@ -1,0 +1,15 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "build",
+        "-f",
+        "apps/web/Dockerfile",
+        "--build-arg",
+        "VITE_API_BASE_URL=https://api.cptemple.com/api",
+        "-t",
+        "asia-east1-docker.pkg.dev/tms-system-501704/tms-repo/tms-web:latest",
+        ".",
+      ]
+images:
+  - "asia-east1-docker.pkg.dev/tms-system-501704/tms-repo/tms-web:latest"

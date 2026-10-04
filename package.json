@@ -1,0 +1,16 @@
+{
+  "name": "tms-system",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:api": "pnpm --filter @tms/api start:dev",
+    "dev:web": "pnpm --filter @tms/web dev",
+    "build": "pnpm --filter @tms/shared build && pnpm --filter @tms/api build && pnpm --filter @tms/web build",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+

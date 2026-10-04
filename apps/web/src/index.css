@@ -1,0 +1,69 @@
+body {
+  margin: 0;
+  font-family: "Microsoft JhengHei", "PMingLiU", sans-serif;
+  background: #f5f2ee;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 10px;
+}
+
+.slot-cell {
+  border-radius: 10px;
+  padding: 14px 6px;
+  text-align: center;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 16px;
+  border: 2px solid transparent;
+  transition: transform 0.1s ease;
+}
+
+.slot-cell:hover {
+  transform: scale(1.04);
+}
+
+.slot-cell.empty {
+  background: #d5efd8;
+  color: #1a5c26;
+}
+
+.slot-cell.claimed {
+  background: #f3cfcb;
+  color: #7a1f16;
+  cursor: default;
+}
+
+/* 「座位表」一桌一橫排：同一桌的座位固定排在同一行，不隨容器寬度自動換行跟下一桌混在一起；
+   座位數多到放不下時該行自己橫向捲動，不會影響其他桌的排列。 */
+.table-seat-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.table-seat-row .slot-cell {
+  flex: 0 0 90px;
+}
+
+/* 「指定活動」下拉選單有選定活動時整體變醒目：邊框、底色、文字都改紅色系，
+   讓已指定活動的捐款一眼就能認出來，不用細看文字內容才發現。
+   antd Select 的文字色是設在 .ant-select-selection-item 這個子元素上，不是外層 .ant-select，
+   直接對外層設 color 不會生效，底色/邊框則是設在 .ant-select-selector 上。 */
+.ceremony-selected-select .ant-select-selector {
+  background: #fff1f0 !important;
+  border-color: #cf1322 !important;
+}
+
+.ceremony-selected-select .ant-select-selector .ant-select-selection-item {
+  color: #cf1322 !important;
+  font-weight: bold;
+}

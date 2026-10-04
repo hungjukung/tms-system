@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+.env
+**/.env
+*.log
+**/*.log
+.git
+apps/api/uploads
+apps/api/test-seal.png
