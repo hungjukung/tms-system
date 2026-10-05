@@ -30,6 +30,7 @@ const roleLabel: Record<UserRole, string> = {
   [UserRole.DIRECTOR]: "總幹事/主委",
   [UserRole.DATA_ENTRY]: "資料建檔人員（僅能新增信徒/戶籍資料，可多人共用同一帳號同時使用）",
   [UserRole.REGISTRAR]: "報名櫃檯人員（可辦理活動報名、新增信徒/戶籍資料、查看每日結帳）",
+  [UserRole.VIEWER]: "唯讀帳號（可檢視所有頁面與資料，無法新增/修改/刪除任何資料）",
 };
 
 const roleOptions = Object.entries(roleLabel).map(([value, label]) => ({ value, label }));

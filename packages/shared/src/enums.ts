@@ -4,6 +4,8 @@ export enum UserRole {
   DIRECTOR = "DIRECTOR", // 總幹事/主委
   DATA_ENTRY = "DATA_ENTRY", // 資料建檔人員：只能新增信徒與戶籍資料
   REGISTRAR = "REGISTRAR", // 報名櫃檯人員：可辦理活動報名（含點燈/捐款/送禮）、新增信徒與戶籍資料、查看每日結帳
+  /** 唯讀帳號：可檢視所有頁面與資料，但不論任何端點一律禁止非 GET 請求（見 RolesGuard），供外部人員參觀系統使用 */
+  VIEWER = "VIEWER",
 }
 
 export enum MemberTagType {

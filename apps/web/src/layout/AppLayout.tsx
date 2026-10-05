@@ -16,6 +16,7 @@ const roleLabel: Record<UserRole, string> = {
   [UserRole.DIRECTOR]: "總幹事/主委",
   [UserRole.DATA_ENTRY]: "資料建檔人員",
   [UserRole.REGISTRAR]: "報名櫃檯人員",
+  [UserRole.VIEWER]: "唯讀帳號",
 };
 
 export function AppLayout() {
@@ -49,8 +50,12 @@ export function AppLayout() {
           { key: "/households", label: "信徒管理" },
           { key: "/finance", label: "財務管理" },
           { key: "/inventory", label: "物資庫存" },
-          ...(user?.role === UserRole.DIRECTOR ? [{ key: "/create-activity", label: "建立活動" }] : []),
-          ...(user?.role === UserRole.DIRECTOR ? [{ key: "/settings", label: "系統設定" }] : []),
+          ...(user?.role === UserRole.DIRECTOR || user?.role === UserRole.VIEWER
+            ? [{ key: "/create-activity", label: "建立活動" }]
+            : []),
+          ...(user?.role === UserRole.DIRECTOR || user?.role === UserRole.VIEWER
+            ? [{ key: "/settings", label: "系統設定" }]
+            : []),
         ];
 
   return (
@@ -86,6 +91,14 @@ export function AppLayout() {
       </Header>
 
       <MyProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} />
+      {user?.role === UserRole.VIEWER && (
+        <Alert
+          type="info"
+          showIcon
+          banner
+          message="目前登入的是唯讀帳號：可檢視所有頁面與資料，但任何新增/修改/刪除操作都會被系統擋下"
+        />
+      )}
       {!isDataEntry && !isRegistrar && lowStockItems.length > 0 && (
         <Alert
           type="warning"
