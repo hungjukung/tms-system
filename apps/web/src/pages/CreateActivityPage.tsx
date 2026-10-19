@@ -26,6 +26,7 @@ import dayjs, { Dayjs } from "dayjs";
 import {
   CeremonyDto,
   CeremonyFeeMode,
+  GenerateLanternSlotsRequest,
   LANTERN_TYPE_OPTIONS,
   LanternSlotDto,
   LanternSlotStatus,
@@ -833,14 +834,20 @@ function LanternSlotPicker({
   submitting,
   errorMessage,
 }: {
-  onSubmit: (values: { prefix: string; positions: { row: number; column: number }[] }) => void;
+  onSubmit: (values: GenerateLanternSlotsRequest) => void;
   submitting: boolean;
   errorMessage?: string;
 }) {
   const [prefix, setPrefix] = useState("A");
   const [gridRows, setGridRows] = useState(DEFAULT_PICKER_ROWS);
   const [gridColumns, setGridColumns] = useState(DEFAULT_PICKER_COLUMNS);
+  const [horizontal, setHorizontal] = useState<"RTL" | "LTR">("RTL");
+  const [vertical, setVertical] = useState<"TTB" | "BTT">("TTB");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // 編號以畫布邊緣起算（不以選取範圍起算），之後再補建同一面牆的其他排時編號才接得上
+  const numberRow = (row: number) => (vertical === "TTB" ? row : gridRows - row + 1);
+  const numberColumn = (col: number) => (horizontal === "LTR" ? col : gridColumns - col + 1);
   const draggingRef = useRef(false);
   const dragModeRef = useRef<"select" | "deselect">("select");
   const dragAnchorRef = useRef<{ row: number; col: number } | null>(null);
@@ -938,21 +945,54 @@ function LanternSlotPicker({
         </Button>
         <Button onClick={() => setSelected(new Set())}>清除選取</Button>
       </Space>
+      <Space wrap>
+        <Space>
+          <Typography.Text>橫向編號</Typography.Text>
+          <Radio.Group
+            optionType="button"
+            value={horizontal}
+            onChange={(e) => setHorizontal(e.target.value)}
+            options={[
+              { label: "由右至左", value: "RTL" },
+              { label: "由左至右", value: "LTR" },
+            ]}
+          />
+        </Space>
+        <Space>
+          <Typography.Text>縱向編號</Typography.Text>
+          <Radio.Group
+            optionType="button"
+            value={vertical}
+            onChange={(e) => setVertical(e.target.value)}
+            options={[
+              { label: "由上至下", value: "TTB" },
+              { label: "由下至上", value: "BTT" },
+            ]}
+          />
+        </Space>
+      </Space>
       <Typography.Text type="secondary">
-        點擊格子切換選取（灰色→紅色表示已選取成功），也可以按住滑鼠左鍵拖曳，拖曳起點到目前位置之間的整個方形範圍會一起被選取；空格不夠可調整上方排數／每排格數，或按「清除選取」重新開始
+        點擊格子切換選取（灰色→紅色表示已選取成功），也可以按住滑鼠左鍵拖曳，拖曳起點到目前位置之間的整個方形範圍會一起被選取；空格不夠可調整上方排數／每排格數，或按「清除選取」重新開始。
+        紅色格子裡的數字是建立後的燈位號碼，01 號從{horizontal === "RTL" ? "最右邊" : "最左邊"}開始，第 1 排在
+        {vertical === "TTB" ? "最上面" : "最下面"}
       </Typography.Text>
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: `repeat(${gridColumns}, minmax(24px, 40px))`,
+          gridTemplateColumns: `auto repeat(${gridColumns}, minmax(24px, 40px))`,
+          justifyContent: "start",
           gap: 4,
+          alignItems: "center",
           userSelect: "none",
         }}
         onDragStart={(e) => e.preventDefault()}
         data-testid="lantern-slot-grid"
       >
-        {rowsArray.flatMap((row) =>
-          colsArray.map((col) => {
+        {rowsArray.flatMap((row) => [
+          <Typography.Text key={`label-${row}`} type="secondary" style={{ fontSize: 12, paddingRight: 4 }}>
+            第 {numberRow(row)} 排
+          </Typography.Text>,
+          ...colsArray.map((col) => {
             const isSelected = selected.has(cellKey(row, col));
             return (
               <div
@@ -967,11 +1007,18 @@ function LanternSlotPicker({
                   borderRadius: 6,
                   cursor: "pointer",
                   background: isSelected ? "#c0504d" : "#d9d9d9",
+                  color: "#fff",
+                  fontSize: 11,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
                 }}
-              />
+              >
+                {isSelected ? String(numberColumn(col)).padStart(2, "0") : null}
+              </div>
             );
           }),
-        )}
+        ])}
       </div>
       <Alert type="info" message={`已選取 ${selected.size} 個燈位`} />
       <Button
@@ -983,8 +1030,8 @@ function LanternSlotPicker({
           onSubmit({
             prefix: prefix.trim(),
             positions: Array.from(selected).map((k) => {
-              const [row, column] = k.split("-").map(Number);
-              return { row, column };
+              const [gridRow, gridColumn] = k.split("-").map(Number);
+              return { row: numberRow(gridRow), column: numberColumn(gridColumn), gridRow, gridColumn };
             }),
           })
         }
@@ -1175,7 +1222,7 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
   });
 
   const generateSlotsMutation = useMutation({
-    mutationFn: (values: { prefix: string; positions: { row: number; column: number }[] }) =>
+    mutationFn: (values: GenerateLanternSlotsRequest) =>
       generateSlots(wallId!, values),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["wall-slots", wallId] });
@@ -1249,17 +1296,21 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
             </Typography.Text>
           )}
           <Space direction="vertical" style={{ width: "100%" }} size="middle">
-            {Array.from(new Set((slotsQuery.data ?? []).map((s) => s.row)))
+            {Array.from(new Set((slotsQuery.data ?? []).map((s) => s.gridRow)))
               .sort((a, b) => a - b)
-              .map((row) => (
-                <div key={row}>
+              .map((gridRow) => (
+                <div key={gridRow}>
                   <Typography.Text strong style={{ display: "block", marginBottom: 6 }}>
-                    第 {row} 排
+                    第{" "}
+                    {Array.from(
+                      new Set((slotsQuery.data ?? []).filter((s) => s.gridRow === gridRow).map((s) => s.row)),
+                    ).join("、")}{" "}
+                    排
                   </Typography.Text>
                   <div className="table-seat-row">
                     {(slotsQuery.data ?? [])
-                      .filter((s) => s.row === row)
-                      .sort((a, b) => b.column - a.column)
+                      .filter((s) => s.gridRow === gridRow)
+                      .sort((a, b) => a.gridColumn - b.gridColumn)
                       .map((slot) => (
                         <div
                           key={slot.id}

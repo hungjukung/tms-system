@@ -27,12 +27,19 @@ export class LanternSlot {
   @Column()
   code: string; // 例如 A-01
 
-  // 建立時在畫布上點選的排號/格號，供「燈位表」依原始形狀排列顯示
+  // 編號用的排號/格號（與 code 一致），依建立時選的橫向/縱向編號順序換算
   @Column({ type: "int" })
   row: number;
 
   @Column({ type: "int", name: "column" })
   column: number;
+
+  // 在建立畫布上的實際位置（1 = 最上排／最左格），燈位圖依此排列
+  @Column({ type: "int" })
+  gridRow: number;
+
+  @Column({ type: "int" })
+  gridColumn: number;
 
   @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;

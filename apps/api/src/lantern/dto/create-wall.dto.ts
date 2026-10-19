@@ -50,6 +50,14 @@ export class SlotPositionDto {
   @IsInt()
   @IsPositive()
   column: number;
+
+  @IsInt()
+  @IsPositive()
+  gridRow: number;
+
+  @IsInt()
+  @IsPositive()
+  gridColumn: number;
 }
 
 export class GenerateSlotsDto {

@@ -140,13 +140,20 @@ export class LanternService {
     if (!wall) throw new NotFoundException("找不到燈牆");
 
     // 單排時沿用扁平命名（A-01），跨多排時以「排-號」命名（A1-01）方便對應實體燈牆位置；
-    // 編號採用使用者在畫布上點選的實際排號/格號（而非壓縮後的序號），以符合實體燈牆位置
+    // row/column 是前端依選定的編號方向換算好的排號/格號（以畫布邊緣起算，不壓縮空格），gridRow/gridColumn 是畫布上的實際位置
     const isSingleRow = new Set(dto.positions.map((p) => p.row)).size === 1;
     const slots: LanternSlot[] = dto.positions.map((p) => {
       const code = isSingleRow
         ? `${dto.prefix}-${String(p.column).padStart(2, "0")}`
         : `${dto.prefix}${p.row}-${String(p.column).padStart(2, "0")}`;
-      return this.slotRepo.create({ wallId, code, row: p.row, column: p.column });
+      return this.slotRepo.create({
+        wallId,
+        code,
+        row: p.row,
+        column: p.column,
+        gridRow: p.gridRow,
+        gridColumn: p.gridColumn,
+      });
     });
 
     try {
@@ -163,7 +170,7 @@ export class LanternService {
     const wall = await this.wallRepo.findOne({ where: { id: wallId } });
     if (!wall) throw new NotFoundException("找不到燈牆");
 
-    const slots = await this.slotRepo.find({ where: { wallId }, order: { row: "ASC", column: "ASC" } });
+    const slots = await this.slotRepo.find({ where: { wallId }, order: { gridRow: "ASC", gridColumn: "ASC" } });
     const claims = await this.claimRepo.find({
       where: { slotId: In(slots.map((s) => s.id)), year: wall.year },
     });
@@ -1048,6 +1055,8 @@ export class LanternService {
       code: slot.code,
       row: slot.row,
       column: slot.column,
+      gridRow: slot.gridRow,
+      gridColumn: slot.gridColumn,
       status: claim ? LanternSlotStatus.CLAIMED : LanternSlotStatus.EMPTY,
       claim: claim
         ? {

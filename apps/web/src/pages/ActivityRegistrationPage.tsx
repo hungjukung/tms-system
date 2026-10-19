@@ -1134,7 +1134,7 @@ function LanternSlotPickerModal({
   const slots = slotsQuery.data ?? [];
   const maxRowLength = slots.length
     ? Math.max(
-        ...Array.from(new Set(slots.map((s) => s.row))).map((row) => slots.filter((s) => s.row === row).length),
+        ...Array.from(new Set(slots.map((s) => s.gridRow))).map((r) => slots.filter((s) => s.gridRow === r).length),
       )
     : 0;
   const rowWidth = maxRowLength > 0 ? maxRowLength * 90 + Math.max(maxRowLength - 1, 0) * 10 : 0;
@@ -1164,17 +1164,21 @@ function LanternSlotPickerModal({
       ) : (
         <>
           <Space direction="vertical" style={{ width: "100%" }} size="middle">
-            {Array.from(new Set((slotsQuery.data ?? []).map((s) => s.row)))
+            {Array.from(new Set((slotsQuery.data ?? []).map((s) => s.gridRow)))
               .sort((a, b) => a - b)
-              .map((row) => (
-                <div key={row}>
+              .map((gridRow) => (
+                <div key={gridRow}>
                   <Typography.Text strong style={{ display: "block", marginBottom: 6 }}>
-                    第 {row} 排
+                    第{" "}
+                    {Array.from(
+                      new Set((slotsQuery.data ?? []).filter((s) => s.gridRow === gridRow).map((s) => s.row)),
+                    ).join("、")}{" "}
+                    排
                   </Typography.Text>
                   <div className="table-seat-row">
                     {(slotsQuery.data ?? [])
-                      .filter((s) => s.row === row)
-                      .sort((a, b) => b.column - a.column)
+                      .filter((s) => s.gridRow === gridRow)
+                      .sort((a, b) => a.gridColumn - b.gridColumn)
                       .map((slot) => {
                         const empty = slot.status === LanternSlotStatus.EMPTY;
                         const chosenHere = isMulti && isChosen(slot);

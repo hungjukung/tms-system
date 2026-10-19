@@ -199,8 +199,13 @@ export interface UpdateLanternWallRequest {
 }
 
 export interface SlotPositionRequest {
+  /** 編號用的排號（燈位代碼裡的排號），依建立時選的縱向順序換算 */
   row: number;
+  /** 編號用的格號（燈位代碼裡的號碼），依建立時選的橫向順序換算 */
   column: number;
+  /** 在畫布上的實際位置（第 1 排 = 最上面、第 1 格 = 最左邊），供燈位圖照實際形狀排列 */
+  gridRow: number;
+  gridColumn: number;
 }
 
 export interface GenerateLanternSlotsRequest {
@@ -212,10 +217,13 @@ export interface LanternSlotDto {
   id: string;
   wallId: string;
   code: string;
-  /** 建立時在畫布上點選的排號（同一排的燈位共用同一個 row），供「燈位表」照原始形狀還原排列 */
+  /** 編號用的排號（與燈位代碼一致），顯示為「第 N 排」 */
   row: number;
-  /** 建立時在畫布上點選的格號 */
+  /** 編號用的格號（與燈位代碼一致） */
   column: number;
+  /** 實際位置：第 1 排 = 最上面、第 1 格 = 最左邊，燈位圖依此排列，與建立時的畫布形狀一致 */
+  gridRow: number;
+  gridColumn: number;
   status: LanternSlotStatus;
   claim?: {
     id: string;
