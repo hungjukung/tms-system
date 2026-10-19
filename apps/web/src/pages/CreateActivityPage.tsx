@@ -505,11 +505,11 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
   };
 
   // 讓 Modal 寬度剛好容納一整桌（一橫排），不用捲軸就能看到整桌座位；
-  // .slot-cell 固定寬 90px、.table-seat-row 間距 10px（見 index.css），超出視窗寬度時才退而求其次盡量貼齊視窗邊緣
+  // 寧可讓 Modal 比視窗寬（使用者可自行放大視窗），也不要為了遷就視窗寬度而把座位擠出捲軸
+  // .slot-cell 固定寬 90px、.table-seat-row 間距 10px（見 index.css）
   const seatsPerTable = ceremony.seatsPerTable ?? 0;
   const seatRowWidth = seatsPerTable > 0 ? seatsPerTable * 90 + Math.max(seatsPerTable - 1, 0) * 10 : 0;
-  const modalWidth =
-    seatsPerTable > 0 ? Math.min(Math.max(seatRowWidth + 120, 800), window.innerWidth - 20) : 800;
+  const modalWidth = seatsPerTable > 0 ? Math.max(seatRowWidth + 120, 800) : 800;
 
   return (
     <Modal title={`活動詳情：${ceremony.name}`} open onCancel={onClose} footer={null} width={modalWidth}>
