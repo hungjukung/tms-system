@@ -1092,10 +1092,12 @@ function EditWallModal({ wall, onClose }: { wall: LanternWallDto; onClose: () =>
 function LanternWallListCard({
   templeId,
   selectedWallId,
+  onSelectWall,
   onWallDeleted,
 }: {
   templeId: string;
   selectedWallId?: string;
+  onSelectWall: (id: string) => void;
   onWallDeleted: (id: string) => void;
 }) {
   const { message, modal } = App.useApp();
@@ -1142,7 +1144,7 @@ function LanternWallListCard({
             dataIndex: "name",
             render: (name: string, record: LanternWallDto) => (
               <Space size={4}>
-                {name}
+                <Typography.Link onClick={() => onSelectWall(record.id)}>{name}</Typography.Link>
                 {record.id === selectedWallId && <Tag color="blue">使用中</Tag>}
                 {record.isTaisuiWall && <Tag color="purple">太歲燈牆</Tag>}
               </Space>
@@ -1204,6 +1206,13 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
   const [editingSlot, setEditingSlot] = useState<LanternSlotDto | null>(null);
   const [wallForm] = Form.useForm();
   const [pickerResetToken, setPickerResetToken] = useState(0);
+  const slotCardRef = useRef<HTMLDivElement>(null);
+  const [scrollToSlotCard, setScrollToSlotCard] = useState(0);
+
+  // 等選定燈牆後的畫面更新完（畫布出現、頁面變長）再捲動，否則捲動當下頁面可能還不夠長而捲不到定位
+  useEffect(() => {
+    if (scrollToSlotCard) slotCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [scrollToSlotCard]);
 
   const wallsQuery = useQuery({ queryKey: ["walls", templeId], queryFn: () => listWalls(templeId) });
   const slotsQuery = useQuery({
@@ -1259,7 +1268,7 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
         </Form>
       </Card>
 
-      <Card title="新增燈位">
+      <Card title="新增燈位" ref={slotCardRef}>
         <Space direction="vertical" style={{ width: "100%" }}>
           <Space wrap>
             <Typography.Text strong>燈牆：</Typography.Text>
@@ -1343,6 +1352,10 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
       <LanternWallListCard
         templeId={templeId}
         selectedWallId={wallId}
+        onSelectWall={(id) => {
+          setWallId(id);
+          setScrollToSlotCard((n) => n + 1);
+        }}
         onWallDeleted={(deletedId) => {
           if (deletedId === wallId) setWallId(undefined);
         }}
