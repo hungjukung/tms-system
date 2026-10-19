@@ -54,6 +54,20 @@ body {
   flex: 0 0 90px;
 }
 
+/* 活動座位表：一桌的座位一定全部排在同一行，視窗不夠寬時座位一起縮窄，不出現捲軸 */
+.table-seat-row.fit-row {
+  overflow-x: visible;
+}
+
+.table-seat-row.fit-row .slot-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 106px;
+  box-sizing: border-box;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
 /* 「指定活動」下拉選單有選定活動時整體變醒目：邊框、底色、文字都改紅色系，
    讓已指定活動的捐款一眼就能認出來，不用細看文字內容才發現。
    antd Select 的文字色是設在 .ant-select-selection-item 這個子元素上，不是外層 .ant-select，

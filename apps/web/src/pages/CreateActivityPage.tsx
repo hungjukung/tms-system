@@ -504,12 +504,11 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
     exportRowsToExcel(`座位表_${ceremony.name}.xlsx`, "座位表", headers, rows);
   };
 
-  // 讓 Modal 寬度剛好容納一整桌（一橫排），不用捲軸就能看到整桌座位；
-  // 寧可讓 Modal 比視窗寬（使用者可自行放大視窗），也不要為了遷就視窗寬度而把座位擠出捲軸
-  // .slot-cell 固定寬 90px、.table-seat-row 間距 10px（見 index.css）
+  // 座位格實際寬 106px（含 padding/border，見 index.css 的 .fit-row）、間距 10px；
+  // +90 是 Modal 與 Card 的左右內距。antd 會把 Modal 限制在視窗寬度內，放不下時由 .fit-row 讓座位縮窄
   const seatsPerTable = ceremony.seatsPerTable ?? 0;
-  const seatRowWidth = seatsPerTable > 0 ? seatsPerTable * 90 + Math.max(seatsPerTable - 1, 0) * 10 : 0;
-  const modalWidth = seatsPerTable > 0 ? Math.max(seatRowWidth + 120, 800) : 800;
+  const seatRowWidth = seatsPerTable > 0 ? seatsPerTable * 106 + (seatsPerTable - 1) * 10 : 0;
+  const modalWidth = Math.max(seatRowWidth + 90, 800);
 
   return (
     <Modal title={`活動詳情：${ceremony.name}`} open onCancel={onClose} footer={null} width={modalWidth}>
@@ -571,7 +570,7 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
                   <Typography.Text strong style={{ display: "block", marginBottom: 6 }}>
                     第 {tableNumber} 桌
                   </Typography.Text>
-                  <div className="table-seat-row">
+                  <div className="table-seat-row fit-row">
                     {seats
                       .filter((s) => s.tableNumber === tableNumber)
                       .map((seat) => (
