@@ -259,7 +259,7 @@ function CeremonyListCard({ templeId }: { templeId: string }) {
   const queryClient = useQueryClient();
   const [editingCeremony, setEditingCeremony] = useState<CeremonyDto | null>(null);
   const [detailCeremony, setDetailCeremony] = useState<CeremonyDto | null>(null);
-  const [showExpired, setShowExpired] = useState(true);
+  const [showExpired, setShowExpired] = useState(false);
   const ceremoniesQuery = useQuery({
     queryKey: ["ceremonies", templeId],
     queryFn: () => listCeremonies(templeId),
