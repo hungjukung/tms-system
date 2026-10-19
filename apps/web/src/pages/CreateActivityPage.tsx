@@ -1268,7 +1268,22 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
         </Form>
       </Card>
 
-      <Card title="新增燈位" ref={slotCardRef}>
+      <Card
+        title="新增燈位"
+        ref={slotCardRef}
+        extra={
+          wallId && (
+            <Button
+              onClick={() => {
+                setWallId(undefined);
+                generateSlotsMutation.reset();
+              }}
+            >
+              取消
+            </Button>
+          )
+        }
+      >
         <Space direction="vertical" style={{ width: "100%" }}>
           <Space wrap>
             <Typography.Text strong>燈牆：</Typography.Text>
