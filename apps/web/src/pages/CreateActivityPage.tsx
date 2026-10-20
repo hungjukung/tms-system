@@ -965,8 +965,8 @@ function LanternSlotPicker({
             value={vertical}
             onChange={(e) => setVertical(e.target.value)}
             options={[
-              { label: "由上至下", value: "TTB" },
-              { label: "由下至上", value: "BTT" },
+              { label: "上/前到下/後", value: "TTB" },
+              { label: "下/後到上/前", value: "BTT" },
             ]}
           />
         </Space>
@@ -974,7 +974,7 @@ function LanternSlotPicker({
       <Typography.Text type="secondary">
         點擊格子切換選取（灰色→紅色表示已選取成功），也可以按住滑鼠左鍵拖曳，拖曳起點到目前位置之間的整個方形範圍會一起被選取；空格不夠可調整上方排數／每排格數，或按「清除選取」重新開始。
         紅色格子裡的數字是建立後的燈位號碼，01 號從{horizontal === "RTL" ? "最右邊" : "最左邊"}開始，第 1 排在
-        {vertical === "TTB" ? "最上面" : "最下面"}
+        {vertical === "TTB" ? "最上面／最前面" : "最下面／最後面"}
       </Typography.Text>
       <div
         style={{
