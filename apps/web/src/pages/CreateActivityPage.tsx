@@ -830,17 +830,23 @@ const DEFAULT_PICKER_COLUMNS = 10;
  * 拖曳採矩形框選（從拖曳起點到目前游標位置之間的整個方形範圍），而非只選滑鼠實際劃過的路徑。
  */
 function LanternSlotPicker({
+  existingSlots,
   onSubmit,
   submitting,
   errorMessage,
 }: {
+  /** 這面燈牆已建立的燈位：畫在畫布上對應位置（不可再選），讓人看得出哪些格子已經有燈位 */
+  existingSlots: LanternSlotDto[];
   onSubmit: (values: GenerateLanternSlotsRequest) => void;
   submitting: boolean;
   errorMessage?: string;
 }) {
   const [prefix, setPrefix] = useState("A");
-  const [gridRows, setGridRows] = useState(DEFAULT_PICKER_ROWS);
-  const [gridColumns, setGridColumns] = useState(DEFAULT_PICKER_COLUMNS);
+  const existingByKey = new Map(existingSlots.map((s) => [`${s.gridRow}-${s.gridColumn}`, s]));
+  const existingMaxRow = Math.max(0, ...existingSlots.map((s) => s.gridRow));
+  const existingMaxColumn = Math.max(0, ...existingSlots.map((s) => s.gridColumn));
+  const [gridRows, setGridRows] = useState(Math.max(DEFAULT_PICKER_ROWS, existingMaxRow));
+  const [gridColumns, setGridColumns] = useState(Math.max(DEFAULT_PICKER_COLUMNS, existingMaxColumn));
   const [horizontal, setHorizontal] = useState<"RTL" | "LTR">("RTL");
   const [vertical, setVertical] = useState<"TTB" | "BTT">("TTB");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -855,6 +861,12 @@ function LanternSlotPicker({
 
   const cellKey = (row: number, col: number) => `${row}-${col}`;
 
+  // 既有燈位載入後，畫布至少要大到放得下它們
+  useEffect(() => {
+    setGridRows((r) => Math.max(r, existingMaxRow));
+    setGridColumns((c) => Math.max(c, existingMaxColumn));
+  }, [existingMaxRow, existingMaxColumn]);
+
   // 從拖曳起點到目前這格畫出矩形範圍，套用到拖曳開始前的選取狀態上（即時預覽，方形範圍內全部一起選取/取消選取）
   const applyRectFromAnchor = (row: number, col: number) => {
     const anchor = dragAnchorRef.current;
@@ -866,6 +878,7 @@ function LanternSlotPicker({
     const next = new Set(preDragSelectedRef.current);
     for (let r = rMin; r <= rMax; r++) {
       for (let c = cMin; c <= cMax; c++) {
+        if (existingByKey.has(cellKey(r, c))) continue;
         if (dragModeRef.current === "select") next.add(cellKey(r, c));
         else next.delete(cellKey(r, c));
       }
@@ -875,6 +888,7 @@ function LanternSlotPicker({
 
   const handleMouseDown = (row: number, col: number) => (e: React.MouseEvent) => {
     e.preventDefault();
+    if (existingByKey.has(cellKey(row, col))) return;
     dragModeRef.current = selected.has(cellKey(row, col)) ? "deselect" : "select";
     dragAnchorRef.current = { row, col };
     preDragSelectedRef.current = selected;
@@ -940,7 +954,12 @@ function LanternSlotPicker({
             onChange={(v) => setGridColumns(v || 1)}
           />
         </Space>
-        <Button onClick={() => setSelected(new Set(rowsArray.flatMap((r) => colsArray.map((c) => cellKey(r, c)))))}>
+        <Button onClick={() => setSelected(
+              new Set(
+                rowsArray.flatMap((r) => colsArray.map((c) => cellKey(r, c))).filter((k) => !existingByKey.has(k)),
+              ),
+            )
+          }>
           全選
         </Button>
         <Button onClick={() => setSelected(new Set())}>清除選取</Button>
@@ -973,7 +992,7 @@ function LanternSlotPicker({
       </Space>
       <Typography.Text type="secondary">
         點擊格子切換選取（灰色→紅色表示已選取成功），也可以按住滑鼠左鍵拖曳，拖曳起點到目前位置之間的整個方形範圍會一起被選取；空格不夠可調整上方排數／每排格數，或按「清除選取」重新開始。
-        紅色格子裡的數字是建立後的燈位號碼，01 號從{horizontal === "RTL" ? "最右邊" : "最左邊"}開始，第 1 排在
+        綠色／粉紅色格子是這面燈牆已有的燈位（粉紅色已點亮），不能重複選取。紅色格子裡的數字是建立後的燈位號碼，01 號從{horizontal === "RTL" ? "最右邊" : "最左邊"}開始，第 1 排在
         {vertical === "TTB" ? "最上面／最前面" : "最下面／最後面"}
       </Typography.Text>
       <div
@@ -994,9 +1013,11 @@ function LanternSlotPicker({
           </Typography.Text>,
           ...colsArray.map((col) => {
             const isSelected = selected.has(cellKey(row, col));
+            const existing = existingByKey.get(cellKey(row, col));
             return (
               <div
                 key={cellKey(row, col)}
+                title={existing ? `已有燈位 ${existing.code}${existing.claim ? `（${existing.claim.memberName}）` : ""}` : undefined}
                 onMouseDown={handleMouseDown(row, col)}
                 onMouseEnter={handleMouseEnter(row, col)}
                 data-testid={`lantern-slot-cell-${row}-${col}`}
@@ -1005,16 +1026,22 @@ function LanternSlotPicker({
                   width: "100%",
                   aspectRatio: "1 / 1",
                   borderRadius: 6,
-                  cursor: "pointer",
-                  background: isSelected ? "#c0504d" : "#d9d9d9",
-                  color: "#fff",
+                  cursor: existing ? "not-allowed" : "pointer",
+                  background: existing
+                    ? existing.claim
+                      ? "#f3cfcb"
+                      : "#d5efd8"
+                    : isSelected
+                      ? "#c0504d"
+                      : "#d9d9d9",
+                  color: existing ? (existing.claim ? "#7a1f16" : "#1a5c26") : "#fff",
                   fontSize: 11,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                {isSelected ? String(numberColumn(col)).padStart(2, "0") : null}
+                {existing ? existing.code.split("-").pop() : isSelected ? String(numberColumn(col)).padStart(2, "0") : null}
               </div>
             );
           }),
@@ -1300,6 +1327,7 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
           {wallId && (
             <LanternSlotPicker
               key={pickerResetToken}
+              existingSlots={slotsQuery.data ?? []}
               submitting={generateSlotsMutation.isPending}
               errorMessage={
                 generateSlotsMutation.isError
