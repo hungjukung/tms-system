@@ -53,6 +53,7 @@ import { useAuth } from "../context/AuthContext";
 import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportReceiptCertificatePdf, exportRowsToExcel } from "../utils/export";
 import { joinLanternType } from "../utils/lanternType";
+import { lanternCellWidth } from "../utils/lanternCell";
 
 type ActivityKey = "lantern" | "donation" | "ceremony" | "gift";
 
@@ -1132,14 +1133,16 @@ function LanternSlotPickerModal({
   // 讓 Modal 寬度剛好容納最長的一排燈位（一橫排），不用捲軸就能看到整排；
   // .slot-cell 固定寬 90px、.table-seat-row 間距 10px（見 index.css），超出視窗寬度時才退而求其次維持 95vw
   const slots = slotsQuery.data ?? [];
-  const maxRowLength = slots.length
+  const rowWidth = slots.length
     ? Math.max(
-        ...Array.from(new Set(slots.map((s) => s.gridRow))).map((r) => slots.filter((s) => s.gridRow === r).length),
+        ...Array.from(new Set(slots.map((s) => s.gridRow))).map((r) => {
+          const rowSlots = slots.filter((s) => s.gridRow === r);
+          return rowSlots.reduce((sum, s) => sum + lanternCellWidth(s), 0) + (rowSlots.length - 1) * 10;
+        }),
       )
     : 0;
-  const rowWidth = maxRowLength > 0 ? maxRowLength * 90 + Math.max(maxRowLength - 1, 0) * 10 : 0;
   const modalWidth =
-    maxRowLength > 0 ? Math.min(Math.max(rowWidth + 48, 700), Math.floor(window.innerWidth * 0.95)) : 700;
+    rowWidth > 0 ? Math.min(Math.max(rowWidth + 48, 700), Math.floor(window.innerWidth * 0.95)) : 700;
 
   return (
     <Modal
@@ -1175,7 +1178,7 @@ function LanternSlotPickerModal({
                     ).join("、")}{" "}
                     排
                   </Typography.Text>
-                  <div className="table-seat-row">
+                  <div className="table-seat-row lantern-row">
                     {(slotsQuery.data ?? [])
                       .filter((s) => s.gridRow === gridRow)
                       .sort((a, b) => a.gridColumn - b.gridColumn)

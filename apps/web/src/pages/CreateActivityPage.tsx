@@ -1331,7 +1331,7 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
                     ).join("、")}{" "}
                     排
                   </Typography.Text>
-                  <div className="table-seat-row">
+                  <div className="table-seat-row lantern-row">
                     {(slotsQuery.data ?? [])
                       .filter((s) => s.gridRow === gridRow)
                       .sort((a, b) => a.gridColumn - b.gridColumn)

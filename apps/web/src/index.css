@@ -81,3 +81,16 @@ body {
   color: #cf1322 !important;
   font-weight: bold;
 }
+
+/* 燈位格：燈位代碼一列、姓名一列，各自不換行；格子依內容撐寬（最小 90px） */
+.table-seat-row.lantern-row .slot-cell {
+  flex: 0 0 auto;
+  min-width: 90px;
+  padding-left: 10px;
+  padding-right: 10px;
+  box-sizing: border-box;
+}
+
+.table-seat-row.lantern-row .slot-cell > div {
+  white-space: nowrap;
+}
