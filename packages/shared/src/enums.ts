@@ -25,7 +25,7 @@ export enum LanternSlotStatus {
 }
 
 /** 「點燈內容」下拉式選單可複選的固定選項；太歲燈牆固定鎖定為 TAISUI_LANTERN_TYPE，不受此清單限制 */
-export const LANTERN_TYPE_OPTIONS = ["光明燈", "平安燈", "財神燈", "文昌燈", "消災燈"];
+export const LANTERN_TYPE_OPTIONS = ["光明燈", "平安燈", "財利燈", "文昌燈"];
 
 /** 太歲燈牆（isTaisuiWall）唯一可選的點燈內容 */
 export const TAISUI_LANTERN_TYPE = "太歲燈";
