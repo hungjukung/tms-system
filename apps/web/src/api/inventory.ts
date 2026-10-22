@@ -3,6 +3,7 @@ import {
   CreateInventoryItemRequest,
   InventoryItemDto,
   InventoryTransactionDto,
+  UpdateInventoryItemRequest,
 } from "@tms/shared";
 import { apiClient } from "./client";
 
@@ -19,6 +20,15 @@ export async function listLowStockItems(): Promise<InventoryItemDto[]> {
 export async function createInventoryItem(dto: CreateInventoryItemRequest): Promise<InventoryItemDto> {
   const res = await apiClient.post<InventoryItemDto>("/inventory/items", dto);
   return res.data;
+}
+
+export async function updateInventoryItem(id: string, dto: UpdateInventoryItemRequest): Promise<InventoryItemDto> {
+  const res = await apiClient.patch<InventoryItemDto>(`/inventory/items/${id}`, dto);
+  return res.data;
+}
+
+export async function deleteInventoryItem(id: string): Promise<void> {
+  await apiClient.delete(`/inventory/items/${id}`);
 }
 
 export async function adjustInventoryStock(

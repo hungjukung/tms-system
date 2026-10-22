@@ -1,12 +1,15 @@
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, QueryFailedError, Repository } from "typeorm";
 import { InventoryItemDto, InventoryTransactionDto, InventoryTransactionType } from "@tms/shared";
 import { User } from "../auth/entities/user.entity";
 import { InventoryItem } from "./entities/inventory-item.entity";
 import { InventoryTransaction } from "./entities/inventory-transaction.entity";
 import { CreateInventoryItemDto } from "./dto/create-inventory-item.dto";
 import { AdjustStockDto } from "./dto/adjust-stock.dto";
+import { UpdateInventoryItemDto } from "./dto/update-inventory-item.dto";
+
+const PG_UNIQUE_VIOLATION = "23505";
 
 @Injectable()
 export class InventoryService {
@@ -26,6 +29,28 @@ export class InventoryService {
     });
     const saved = await this.itemRepo.save(item);
     return this.toDto(saved);
+  }
+
+  async updateItem(id: string, dto: UpdateInventoryItemDto): Promise<InventoryItemDto> {
+    const item = await this.itemRepo.findOne({ where: { id } });
+    if (!item) throw new NotFoundException("找不到物資項目");
+    item.name = dto.name;
+    item.unit = dto.unit;
+    item.lowStockThreshold = dto.lowStockThreshold;
+    try {
+      return this.toDto(await this.itemRepo.save(item));
+    } catch (err) {
+      if (err instanceof QueryFailedError && (err as any).code === PG_UNIQUE_VIOLATION) {
+        throw new ConflictException("已有同名的物資項目");
+      }
+      throw err;
+    }
+  }
+
+  /** 連同該品項的進貨/領用紀錄一併刪除（資料庫 cascade） */
+  async deleteItem(id: string): Promise<void> {
+    const result = await this.itemRepo.delete({ id });
+    if (result.affected === 0) throw new NotFoundException("找不到物資項目");
   }
 
   async listItems(): Promise<InventoryItemDto[]> {

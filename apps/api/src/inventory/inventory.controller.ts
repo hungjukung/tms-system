@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { UserRole } from "@tms/shared";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { RolesGuard } from "../auth/guards/roles.guard";
@@ -8,6 +8,7 @@ import { RequestUser } from "../auth/jwt-payload.interface";
 import { InventoryService } from "./inventory.service";
 import { CreateInventoryItemDto } from "./dto/create-inventory-item.dto";
 import { AdjustStockDto } from "./dto/adjust-stock.dto";
+import { UpdateInventoryItemDto } from "./dto/update-inventory-item.dto";
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller("inventory")
@@ -18,6 +19,18 @@ export class InventoryController {
   @Roles(UserRole.DIRECTOR)
   createItem(@Body() dto: CreateInventoryItemDto) {
     return this.inventoryService.createItem(dto);
+  }
+
+  @Patch("items/:id")
+  @Roles(UserRole.DIRECTOR)
+  updateItem(@Param("id") id: string, @Body() dto: UpdateInventoryItemDto) {
+    return this.inventoryService.updateItem(id, dto);
+  }
+
+  @Delete("items/:id")
+  @Roles(UserRole.DIRECTOR)
+  deleteItem(@Param("id") id: string) {
+    return this.inventoryService.deleteItem(id);
   }
 
   @Get("items")

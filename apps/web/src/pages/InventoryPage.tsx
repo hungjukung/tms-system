@@ -1,8 +1,29 @@
 import { useState } from "react";
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Radio, Space, Table, Tag } from "antd";
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Radio,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { InventoryItemDto, InventoryTransactionType, UserRole } from "@tms/shared";
-import { adjustInventoryStock, createInventoryItem, listInventoryItems } from "../api/inventory";
+import {
+  adjustInventoryStock,
+  createInventoryItem,
+  deleteInventoryItem,
+  listInventoryItems,
+  updateInventoryItem,
+} from "../api/inventory";
 import { useAuth } from "../context/AuthContext";
 
 function CreateItemForm() {
@@ -45,6 +66,10 @@ export function InventoryPage() {
   const queryClient = useQueryClient();
   const [adjustTarget, setAdjustTarget] = useState<InventoryItemDto | null>(null);
   const [form] = Form.useForm();
+  const { message } = App.useApp();
+  const [editTarget, setEditTarget] = useState<InventoryItemDto | null>(null);
+  const [editForm] = Form.useForm();
+  const isDirector = user?.role === UserRole.DIRECTOR;
 
   const itemsQuery = useQuery({ queryKey: ["inventory-items"], queryFn: listInventoryItems });
 
@@ -57,6 +82,31 @@ export function InventoryPage() {
       setAdjustTarget(null);
       form.resetFields();
     },
+  });
+
+  const refreshItems = () => {
+    queryClient.invalidateQueries({ queryKey: ["inventory-items"] });
+    queryClient.invalidateQueries({ queryKey: ["low-stock-items"] });
+  };
+
+  const editMutation = useMutation({
+    mutationFn: ({ id, ...dto }: { id: string; name: string; unit: string; lowStockThreshold: number }) =>
+      updateInventoryItem(id, dto),
+    onSuccess: () => {
+      refreshItems();
+      setEditTarget(null);
+      message.success("已更新物品");
+    },
+    onError: (err: any) => message.error(err?.response?.data?.message ?? "更新失敗，請重試"),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteInventoryItem,
+    onSuccess: () => {
+      refreshItems();
+      message.success("已刪除物品");
+    },
+    onError: (err: any) => message.error(err?.response?.data?.message ?? "刪除失敗，請重試"),
   });
 
   const lowStockCount = (itemsQuery.data ?? []).filter((i) => i.isLowStock).length;
@@ -98,14 +148,70 @@ export function InventoryPage() {
             {
               title: "操作",
               render: (_, record: InventoryItemDto) => (
-                <Button size="small" onClick={() => setAdjustTarget(record)}>
-                  進貨 / 領用
-                </Button>
+                <Space>
+                  <Button size="small" onClick={() => setAdjustTarget(record)}>
+                    進貨 / 領用
+                  </Button>
+                  {isDirector && (
+                    <>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setEditTarget(record);
+                          editForm.setFieldsValue({
+                            name: record.name,
+                            unit: record.unit,
+                            lowStockThreshold: record.lowStockThreshold,
+                          });
+                        }}
+                      >
+                        編輯
+                      </Button>
+                      <Popconfirm
+                        title="確定要刪除此物品嗎？"
+                        description="該物品的進貨／領用紀錄也會一併刪除，無法復原"
+                        okText="刪除"
+                        okButtonProps={{ danger: true }}
+                        cancelText="取消"
+                        onConfirm={() => deleteMutation.mutate(record.id)}
+                      >
+                        <Button danger size="small">
+                          刪除
+                        </Button>
+                      </Popconfirm>
+                    </>
+                  )}
+                </Space>
               ),
             },
           ]}
         />
       </Card>
+
+      <Modal
+        title={`編輯物品：${editTarget?.name ?? ""}`}
+        open={!!editTarget}
+        onCancel={() => setEditTarget(null)}
+        onOk={() => editForm.submit()}
+        confirmLoading={editMutation.isPending}
+      >
+        <Form
+          form={editForm}
+          layout="vertical"
+          onFinish={(values) => editTarget && editMutation.mutate({ id: editTarget.id, ...values })}
+        >
+          <Form.Item label="品項名稱" name="name" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item label="單位" name="unit" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item label="庫存警戒值" name="lowStockThreshold" rules={[{ required: true }]}>
+            <InputNumber style={{ width: "100%" }} min={0} />
+          </Form.Item>
+          <Typography.Text type="secondary">目前庫存數量請用「進貨 / 領用」調整，才會留下紀錄</Typography.Text>
+        </Form>
+      </Modal>
 
       <Modal
         title={`調整庫存：${adjustTarget?.name ?? ""}`}

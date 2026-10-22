@@ -640,6 +640,12 @@ export interface CreateInventoryItemRequest {
   initialStock?: number;
 }
 
+export interface UpdateInventoryItemRequest {
+  name: string;
+  unit: string;
+  lowStockThreshold: number;
+}
+
 export interface AdjustInventoryStockRequest {
   type: InventoryTransactionType;
   quantity: number;
