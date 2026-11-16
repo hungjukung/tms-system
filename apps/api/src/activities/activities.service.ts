@@ -39,18 +39,22 @@ export class ActivitiesService {
 
     const createdClaimIds: string[] = [];
     const createdRegistrationIds: string[] = [];
+    // 記錄每個點燈項目的點燈人，多人點燈時在備註前面加上名字，讓人看得出誰點了哪一盞
+    const lanternItems: { item: ReceiptItemDto; payer: string }[] = [];
 
     try {
       // 點燈與法會報名有座位/燈位衝突風險，優先處理；捐款/送禮沒有這類風險，留到最後
       for (const claimDto of dto.pendingLanternClaims ?? []) {
         const result = await this.lanternService.claimSlotForCombined(claimDto, userId);
         createdClaimIds.push(result.claimId);
-        items.push({
+        const claimItem: ReceiptItemDto = {
           description: result.description,
           amount: claimDto.amount,
           note: result.note,
           sourceRefs: [{ sourceType: ReceiptSourceType.LANTERN_CLAIM, sourceId: result.claimId }],
-        });
+        };
+        items.push(claimItem);
+        lanternItems.push({ item: claimItem, payer: result.payerName });
         payerName = payerName || result.payerName;
         templeId = templeId || result.templeId;
       }
@@ -58,12 +62,14 @@ export class ActivitiesService {
       for (const householdDto of dto.pendingHouseholdLanternClaims ?? []) {
         const result = await this.lanternService.claimSlotsForHouseholdCombined(householdDto, userId);
         createdClaimIds.push(...result.claimIds);
-        items.push({
+        const householdItem: ReceiptItemDto = {
           description: result.description,
           amount: householdDto.amount,
           note: result.note,
           sourceRefs: result.claimIds.map((id) => ({ sourceType: ReceiptSourceType.LANTERN_CLAIM, sourceId: id })),
-        });
+        };
+        items.push(householdItem);
+        lanternItems.push({ item: householdItem, payer: result.payerName });
         payerName = payerName || result.payerName;
         templeId = templeId || result.templeId;
       }
@@ -114,6 +120,12 @@ export class ActivitiesService {
         });
         payerName = payerName || result.payerName;
         templeId = templeId || result.templeId;
+      }
+
+      if (new Set(lanternItems.map((l) => l.payer)).size > 1) {
+        for (const { item, payer } of lanternItems) {
+          if (payer && item.note) item.note = `${payer}，${item.note}`;
+        }
       }
 
       payerName = payerName || dto.fallbackPayerName || "";
