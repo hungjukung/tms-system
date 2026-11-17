@@ -36,4 +36,14 @@ export class UpdateCeremonyDto {
   @IsOptional()
   @IsDateString()
   registrationDeadline?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  morningCapacity?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  afternoonCapacity?: number | null;
 }

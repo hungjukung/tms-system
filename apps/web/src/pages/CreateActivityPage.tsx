@@ -26,6 +26,7 @@ import dayjs, { Dayjs } from "dayjs";
 import {
   CeremonyDto,
   CeremonyFeeMode,
+  CeremonyKind,
   GenerateLanternSlotsRequest,
   LANTERN_TYPE_OPTIONS,
   LanternSlotDto,
@@ -59,10 +60,11 @@ import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportRowsToExcel } from "../utils/export";
 import { joinLanternType, splitLanternType } from "../utils/lanternType";
 
-type ActivityType = "ceremony" | "lanternWall";
+type ActivityType = "ceremony" | "jigai" | "lanternWall";
 
 const activityTypeOptions: { label: string; value: ActivityType }[] = [
   { label: "活動", value: "ceremony" },
+  { label: "祭改", value: "jigai" },
   { label: "點燈牆", value: "lanternWall" },
 ];
 
@@ -71,7 +73,8 @@ const feeModeLabel: Record<CeremonyFeeMode, string> = {
   [CeremonyFeeMode.FIXED_AMOUNT]: "固定金額",
 };
 
-function CreateCeremonyForm({ templeId }: { templeId: string }) {
+function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeId: string; kind?: CeremonyKind }) {
+  const isJigai = kind === CeremonyKind.JIGAI;
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const feeMode = Form.useWatch("feeMode", form) ?? CeremonyFeeMode.FREE_WILL;
@@ -87,7 +90,7 @@ function CreateCeremonyForm({ templeId }: { templeId: string }) {
   });
 
   return (
-    <Card title="新增活動">
+    <Card title={isJigai ? "新增祭改活動" : "新增活動"}>
       <Form
         form={form}
         layout="vertical"
@@ -100,8 +103,11 @@ function CreateCeremonyForm({ templeId }: { templeId: string }) {
             feeMode: values.feeMode,
             fixedAmount: values.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? values.fixedAmount : undefined,
             description: values.description,
-            tableCount: values.tableCount || undefined,
-            seatsPerTable: values.seatsPerTable || undefined,
+            tableCount: isJigai ? undefined : values.tableCount || undefined,
+            seatsPerTable: isJigai ? undefined : values.seatsPerTable || undefined,
+            kind,
+            morningCapacity: isJigai ? values.morningCapacity : undefined,
+            afternoonCapacity: isJigai ? values.afternoonCapacity : undefined,
             registrationDeadline: values.registrationDeadline
               ? (values.registrationDeadline as Dayjs).format("YYYY-MM-DD")
               : undefined,
@@ -134,15 +140,33 @@ function CreateCeremonyForm({ templeId }: { templeId: string }) {
         <Form.Item label="說明" name="description">
           <Input.TextArea rows={2} />
         </Form.Item>
-        <Space.Compact block>
-          <Form.Item label="桌數（選填，設定後報名會自動配位）" name="tableCount" style={{ width: "50%" }}>
-            <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：10" />
-          </Form.Item>
-          <Form.Item label="每桌人數" name="seatsPerTable" style={{ width: "50%" }}>
-            <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：10" />
-          </Form.Item>
-        </Space.Compact>
-        {tableCount > 0 && seatsPerTable > 0 && (
+        {isJigai ? (
+          <>
+            <Space.Compact block>
+              <Form.Item label="上午場人數" name="morningCapacity" rules={[{ required: true, message: "請輸入人數" }]} style={{ width: "50%" }}>
+                <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：30" />
+              </Form.Item>
+              <Form.Item label="下午場人數" name="afternoonCapacity" rules={[{ required: true, message: "請輸入人數" }]} style={{ width: "50%" }}>
+                <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：30" />
+              </Form.Item>
+            </Space.Compact>
+            <Alert
+              type="info"
+              style={{ marginBottom: 16 }}
+              message="報名時選擇上午場或下午場，各場依序給予號碼（從 1 號起），額滿後該場無法再報名，號碼會印在收據上"
+            />
+          </>
+        ) : (
+          <Space.Compact block>
+            <Form.Item label="桌數（選填，設定後報名會自動配位）" name="tableCount" style={{ width: "50%" }}>
+              <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：10" />
+            </Form.Item>
+            <Form.Item label="每桌人數" name="seatsPerTable" style={{ width: "50%" }}>
+              <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：10" />
+            </Form.Item>
+          </Space.Compact>
+        )}
+        {!isJigai && tableCount > 0 && seatsPerTable > 0 && (
           <Alert
             type="info"
             style={{ marginBottom: 16 }}
@@ -163,6 +187,7 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
   const [form] = Form.useForm();
   const feeMode = Form.useWatch("feeMode", form) ?? ceremony.feeMode;
   const hasRegistrations = ceremony.registrationCount > 0;
+  const isJigai = ceremony.kind === CeremonyKind.JIGAI;
 
   const mutation = useMutation({
     mutationFn: (values: Parameters<typeof updateCeremony>[1]) => updateCeremony(ceremony.id, values),
@@ -189,6 +214,8 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
           description: ceremony.description ?? undefined,
           tableCount: ceremony.tableCount ?? undefined,
           seatsPerTable: ceremony.seatsPerTable ?? undefined,
+          morningCapacity: ceremony.morningCapacity ?? undefined,
+          afternoonCapacity: ceremony.afternoonCapacity ?? undefined,
           registrationDeadline: ceremony.registrationDeadline ? dayjs(ceremony.registrationDeadline) : undefined,
         }}
         onFinish={(values) =>
@@ -198,8 +225,9 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
             feeMode: values.feeMode,
             fixedAmount: values.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? values.fixedAmount : null,
             description: values.description || null,
-            tableCount: values.tableCount || null,
-            seatsPerTable: values.seatsPerTable || null,
+            ...(isJigai
+              ? { morningCapacity: values.morningCapacity, afternoonCapacity: values.afternoonCapacity }
+              : { tableCount: values.tableCount || null, seatsPerTable: values.seatsPerTable || null }),
             registrationDeadline: values.registrationDeadline
               ? (values.registrationDeadline as Dayjs).format("YYYY-MM-DD")
               : null,
@@ -232,15 +260,26 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
         <Form.Item label="說明" name="description">
           <Input.TextArea rows={2} />
         </Form.Item>
-        <Space.Compact block>
-          <Form.Item label="桌數（可增加，不可低於目前已配發的座位）" name="tableCount" style={{ width: "50%" }}>
-            <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：10" />
-          </Form.Item>
-          <Form.Item label="每桌人數" name="seatsPerTable" style={{ width: "50%" }}>
-            <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：10" disabled={hasRegistrations} />
-          </Form.Item>
-        </Space.Compact>
-        {hasRegistrations && (
+        {isJigai ? (
+          <Space.Compact block>
+            <Form.Item label="上午場人數（不可低於已報名人數）" name="morningCapacity" rules={[{ required: true }]} style={{ width: "50%" }}>
+              <InputNumber style={{ width: "100%" }} min={ceremony.morningRegistered || 1} />
+            </Form.Item>
+            <Form.Item label="下午場人數（不可低於已報名人數）" name="afternoonCapacity" rules={[{ required: true }]} style={{ width: "50%" }}>
+              <InputNumber style={{ width: "100%" }} min={ceremony.afternoonRegistered || 1} />
+            </Form.Item>
+          </Space.Compact>
+        ) : (
+          <Space.Compact block>
+            <Form.Item label="桌數（可增加，不可低於目前已配發的座位）" name="tableCount" style={{ width: "50%" }}>
+              <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：10" />
+            </Form.Item>
+            <Form.Item label="每桌人數" name="seatsPerTable" style={{ width: "50%" }}>
+              <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：10" disabled={hasRegistrations} />
+            </Form.Item>
+          </Space.Compact>
+        )}
+        {!isJigai && hasRegistrations && (
           <Alert
             type="warning"
             style={{ marginBottom: 16 }}
@@ -349,7 +388,16 @@ function CeremonyListCard({ templeId }: { templeId: string }) {
           {
             title: "座位",
             render: (_: unknown, record: CeremonyDto) =>
-              record.totalSeats ? (
+              record.kind === CeremonyKind.JIGAI ? (
+                <Space direction="vertical" size={2}>
+                  <Tag color={record.morningRegistered >= (record.morningCapacity ?? 0) ? "red" : "green"}>
+                    上午 {record.morningRegistered}/{record.morningCapacity}
+                  </Tag>
+                  <Tag color={record.afternoonRegistered >= (record.afternoonCapacity ?? 0) ? "red" : "green"}>
+                    下午 {record.afternoonRegistered}/{record.afternoonCapacity}
+                  </Tag>
+                </Space>
+              ) : record.totalSeats ? (
                 <Tag color={record.seatsAssigned >= record.totalSeats ? "red" : "green"}>
                   {record.seatsAssigned}/{record.totalSeats}（{record.tableCount} 桌 × {record.seatsPerTable} 人）
                 </Tag>
@@ -1437,6 +1485,12 @@ export function CreateActivityPage() {
           {activityType === "ceremony" && (
             <>
               <CreateCeremonyForm templeId={templeId} />
+              <CeremonyListCard templeId={templeId} />
+            </>
+          )}
+          {activityType === "jigai" && (
+            <>
+              <CreateCeremonyForm templeId={templeId} kind={CeremonyKind.JIGAI} />
               <CeremonyListCard templeId={templeId} />
             </>
           )}

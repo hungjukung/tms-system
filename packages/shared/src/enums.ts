@@ -79,6 +79,18 @@ export enum CeremonyFeeMode {
   FIXED_AMOUNT = "FIXED_AMOUNT", // 固定金額
 }
 
+/** 活動種類：一般活動（可設桌次座位）／祭改（分上午、下午場，各場有人數上限，報名依序給號碼） */
+export enum CeremonyKind {
+  GENERAL = "GENERAL",
+  JIGAI = "JIGAI",
+}
+
+/** 祭改場次 */
+export enum CeremonySession {
+  AM = "AM", // 上午場
+  PM = "PM", // 下午場
+}
+
 export enum InventoryTransactionType {
   IN = "IN", // 進貨
   OUT = "OUT", // 領用/銷售

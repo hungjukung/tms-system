@@ -1,5 +1,7 @@
 import {
   CeremonyFeeMode,
+  CeremonyKind,
+  CeremonySession,
   DonationType,
   Gender,
   GiftType,
@@ -509,6 +511,13 @@ export interface CeremonyDto {
   seatsPerTable: number | null;
   totalSeats: number | null;
   seatsAssigned: number;
+  /** 活動種類：祭改活動分上午／下午場，不使用桌次座位 */
+  kind: CeremonyKind;
+  /** 祭改：上午場／下午場人數上限與目前已報名人數 */
+  morningCapacity: number | null;
+  afternoonCapacity: number | null;
+  morningRegistered: number;
+  afternoonRegistered: number;
   /** 報名期限：超過此日期後，此活動會從「活動報名」頁的選單隱藏 */
   registrationDeadline: string | null;
   /** 供「建立活動」頁列表顯示：此活動至今累積的報名筆數與收款總額 */
@@ -526,6 +535,9 @@ export interface CreateCeremonyRequest {
   tableCount?: number;
   seatsPerTable?: number;
   registrationDeadline?: string;
+  kind?: CeremonyKind;
+  morningCapacity?: number;
+  afternoonCapacity?: number;
 }
 
 export interface UpdateCeremonyRequest {
@@ -537,6 +549,8 @@ export interface UpdateCeremonyRequest {
   tableCount?: number | null;
   seatsPerTable?: number | null;
   registrationDeadline?: string | null;
+  morningCapacity?: number | null;
+  afternoonCapacity?: number | null;
 }
 
 export interface CeremonyRegistrationDto {
@@ -551,6 +565,9 @@ export interface CeremonyRegistrationDto {
   amount: number;
   wishText: string | null;
   seatNumber: string | null;
+  /** 祭改：場次與該場號碼（從 1 號起） */
+  session: CeremonySession | null;
+  queueNumber: number | null;
   createdAt: string;
   /** 這筆報名對應的收據 id（單筆或合併收據皆可能，找不到時為 null），供「報名名單」查看/刪除收據使用 */
   receiptId: string | null;
@@ -573,6 +590,8 @@ export interface RegisterCeremonyRequest {
   tableNumber?: number;
   /** 此人不需要座位（例如純捐款/隨喜，不會實際入座），即使活動有設定座位也不會佔用任何座位 */
   noSeatNeeded?: boolean;
+  /** 祭改活動：報名的場次，報名時依序給予該場號碼（從 1 號起） */
+  session?: CeremonySession;
 }
 
 /** 供「活動報名」頁一次報名多個活動使用：單筆呼叫立即建立報名紀錄，收據留待與其他活動合併開立 */

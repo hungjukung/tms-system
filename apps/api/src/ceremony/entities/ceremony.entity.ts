@@ -1,4 +1,4 @@
-import { CeremonyFeeMode } from "@tms/shared";
+import { CeremonyFeeMode, CeremonyKind } from "@tms/shared";
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn } from "typeorm";
 
 @Entity("ceremonies")
@@ -33,6 +33,16 @@ export class Ceremony {
 
   @Column({ type: "int", nullable: true })
   seatsPerTable: number | null; // 每桌人數
+
+  /** 活動種類：GENERAL 一般活動、JIGAI 祭改（分上下午場、各場有人數上限） */
+  @Column({ type: "varchar", default: CeremonyKind.GENERAL })
+  kind: CeremonyKind;
+
+  @Column({ type: "int", nullable: true })
+  morningCapacity: number | null; // 祭改上午場人數上限
+
+  @Column({ type: "int", nullable: true })
+  afternoonCapacity: number | null; // 祭改下午場人數上限
 
   /** 已配發的座位數（內部座位計數器，透過原子性 UPDATE 遞增以避免並發搶位重複） */
   @Column({ type: "int", default: 0 })

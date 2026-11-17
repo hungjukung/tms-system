@@ -1,3 +1,4 @@
+import { CeremonySession } from "@tms/shared";
 import {
   Column,
   CreateDateColumn,
@@ -11,6 +12,7 @@ import { Ceremony } from "./ceremony.entity";
 
 @Entity("ceremony_registrations")
 @Unique("uq_ceremony_seat", ["ceremonyId", "seatIndex"])
+@Unique("uq_ceremony_session_number", ["ceremonyId", "session", "queueNumber"])
 export class CeremonyRegistration {
   @PrimaryGeneratedColumn("uuid")
   id: string;
@@ -42,6 +44,13 @@ export class CeremonyRegistration {
 
   @Column({ type: "varchar", nullable: true })
   seatNumber: string | null; // 例如 "1-1" 代表第一桌一號
+
+  /** 祭改：報名場次（上午／下午）與該場號碼（從 1 號起） */
+  @Column({ type: "varchar", nullable: true })
+  session: CeremonySession | null;
+
+  @Column({ type: "int", nullable: true })
+  queueNumber: number | null;
 
   @Column()
   createdByUserId: string;

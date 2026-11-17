@@ -1,4 +1,5 @@
-import { IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min } from "class-validator";
+import { CeremonySession } from "@tms/shared";
+import { IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min } from "class-validator";
 
 export class RegisterCeremonyDto {
   @IsUUID()
@@ -48,4 +49,9 @@ export class RegisterCeremonyDto {
   @IsOptional()
   @IsBoolean()
   noSeatNeeded?: boolean;
+
+  /** 祭改活動：報名場次 */
+  @IsOptional()
+  @IsEnum(CeremonySession)
+  session?: CeremonySession;
 }

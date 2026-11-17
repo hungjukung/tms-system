@@ -1,4 +1,4 @@
-import { CeremonyFeeMode } from "@tms/shared";
+import { CeremonyFeeMode, CeremonyKind } from "@tms/shared";
 import { IsDateString, IsEnum, IsInt, IsNumber, IsOptional, IsPositive, IsString, IsUUID, Min } from "class-validator";
 
 export class CreateCeremonyDto {
@@ -36,4 +36,18 @@ export class CreateCeremonyDto {
   @IsOptional()
   @IsDateString()
   registrationDeadline?: string;
+
+  @IsOptional()
+  @IsEnum(CeremonyKind)
+  kind?: CeremonyKind;
+
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  morningCapacity?: number;
+
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  afternoonCapacity?: number;
 }

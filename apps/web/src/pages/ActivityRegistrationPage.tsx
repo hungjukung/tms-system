@@ -23,6 +23,8 @@ import { io } from "socket.io-client";
 import {
   CeremonyDto,
   CeremonyFeeMode,
+  CeremonyKind,
+  CeremonySession,
   CeremonySeatDto,
   ClaimHouseholdLanternSlotsRequest,
   ClaimLanternSlotRequest,
@@ -663,6 +665,7 @@ function CeremonyRegistrationFields({
   const tableNumber = Form.useWatch("tableNumber", form);
   const tableLabel = Form.useWatch("tableLabel", form);
   const noSeatNeeded = Form.useWatch("noSeatNeeded", form);
+  const session = Form.useWatch("session", form) as CeremonySession | undefined;
   const selectedCeremony = ceremonies.find((c) => c.id === ceremonyId);
   const [seatModalOpen, setSeatModalOpen] = useState(false);
   const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
@@ -699,7 +702,8 @@ function CeremonyRegistrationFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [householdId]);
 
-  const needsSeatPicker = selectedCeremony?.totalSeats != null;
+  const isJigai = selectedCeremony?.kind === CeremonyKind.JIGAI;
+  const needsSeatPicker = !isJigai && selectedCeremony?.totalSeats != null;
   const householdReadyForSeats = payerMode === "household" && !!householdId && headcount > 0;
   const showSeatPicker = needsSeatPicker && (payerMode !== "household" ? true : householdReadyForSeats);
   // 「不需要座位」只開放給個人（已建檔信徒／臨櫃）報名，整戶與認領整桌仍需要座位
@@ -729,6 +733,7 @@ function CeremonyRegistrationFields({
       : payerMode === "walkIn"
         ? !!walkInName
         : !!memberId) &&
+    (isJigai ? !!session : true) &&
     (!needsSeatPicker
       ? true
       : payerMode === "household"
@@ -758,6 +763,7 @@ function CeremonyRegistrationFields({
       tableNumber: values.payerMode === "table" ? values.tableNumber : undefined,
       noSeatNeeded:
         (values.payerMode === "member" || values.payerMode === "walkIn") && values.noSeatNeeded ? true : undefined,
+      session: isJigai ? values.session : undefined,
     };
 
     const ceremonyName = selectedCeremony?.name ?? "";
@@ -770,7 +776,7 @@ function CeremonyRegistrationFields({
     } else {
       const payerName = values.payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
       displayLabel = `${ceremonyName}（${payerName}${
-        request.noSeatNeeded ? "，不需要座位" : seatLabel ? `　${seatLabel}` : ""
+        isJigai ? `　${session === CeremonySession.AM ? "上午場" : "下午場"}` : request.noSeatNeeded ? "，不需要座位" : seatLabel ? `　${seatLabel}` : ""
       }）`;
     }
     onAddPending({ displayLabel, amount: values.amount, request });
@@ -818,6 +824,7 @@ function CeremonyRegistrationFields({
       tableNumber: undefined,
       tableLabel: undefined,
       noSeatNeeded: false,
+      session: undefined,
     });
     setSelectedMemberName(undefined);
   };
@@ -836,7 +843,11 @@ function CeremonyRegistrationFields({
             options={ceremonies.map((c) => ({
               value: c.id,
               label: `${c.name}（${c.date}，${feeModeLabel[c.feeMode]}）${
-                c.totalSeats ? `　座位 ${c.seatsAssigned}/${c.totalSeats}` : ""
+                c.kind === CeremonyKind.JIGAI
+                  ? `　上午 ${c.morningRegistered}/${c.morningCapacity}　下午 ${c.afternoonRegistered}/${c.afternoonCapacity}`
+                  : c.totalSeats
+                    ? `　座位 ${c.seatsAssigned}/${c.totalSeats}`
+                    : ""
               }`,
             }))}
             onChange={(value) => {
@@ -851,9 +862,28 @@ function CeremonyRegistrationFields({
               form.setFieldValue("seatLabel", undefined);
               form.setFieldValue("tableNumber", undefined);
               form.setFieldValue("tableLabel", undefined);
+              form.setFieldValue("session", undefined);
             }}
           />
         </Form.Item>
+        {isJigai && selectedCeremony && (
+          <Form.Item label="場次" name="session" rules={[{ required: true, message: "請選擇場次" }]}>
+            <Radio.Group>
+              <Radio.Button
+                value={CeremonySession.AM}
+                disabled={selectedCeremony.morningRegistered >= (selectedCeremony.morningCapacity ?? 0)}
+              >
+                上午場（{selectedCeremony.morningRegistered}/{selectedCeremony.morningCapacity}）
+              </Radio.Button>
+              <Radio.Button
+                value={CeremonySession.PM}
+                disabled={selectedCeremony.afternoonRegistered >= (selectedCeremony.afternoonCapacity ?? 0)}
+              >
+                下午場（{selectedCeremony.afternoonRegistered}/{selectedCeremony.afternoonCapacity}）
+              </Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+        )}
         <Form.Item label="報名者類型" name="payerMode" initialValue="member">
           <Radio.Group>
             <Radio.Button value="member">已建檔信徒</Radio.Button>
