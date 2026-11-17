@@ -1,11 +1,12 @@
 import { Gender, MemberTagType } from "@tms/shared";
-import { IsArray, IsDateString, IsEnum, IsOptional, IsString } from "class-validator";
+import { IsArray, IsDateString, IsEnum, IsOptional, IsString, MaxLength } from "class-validator";
 
 export class CreateMemberDto {
   @IsString()
   householdAddress: string;
 
   @IsString()
+  @MaxLength(50)
   name: string;
 
   @IsOptional()

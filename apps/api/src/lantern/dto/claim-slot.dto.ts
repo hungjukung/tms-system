@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, IsUUID, Min } from "class-validator";
+import { IsNumber, IsOptional, IsString, IsUUID, Min, MaxLength } from "class-validator";
 
 export class ClaimSlotDto {
   @IsUUID()
@@ -10,6 +10,7 @@ export class ClaimSlotDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   walkInName?: string;
 
   @IsOptional()

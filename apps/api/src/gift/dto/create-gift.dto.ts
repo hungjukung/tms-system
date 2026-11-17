@@ -1,6 +1,6 @@
 import { GiftType } from "@tms/shared";
 import { Type } from "class-transformer";
-import { ArrayMinSize, IsArray, IsEnum, IsInt, IsOptional, IsString, IsUUID, Min, ValidateNested } from "class-validator";
+import { ArrayMinSize, IsArray, IsEnum, IsInt, IsOptional, IsString, IsUUID, Min, ValidateNested, MaxLength } from "class-validator";
 
 export class GiftItemDto {
   @IsEnum(GiftType)
@@ -21,6 +21,7 @@ export class CreateGiftDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   walkInName?: string;
 
   @IsArray()

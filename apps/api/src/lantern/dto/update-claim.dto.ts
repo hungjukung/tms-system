@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsUUID } from "class-validator";
+import { IsOptional, IsString, IsUUID, MaxLength } from "class-validator";
 
 export class UpdateLanternClaimDto {
   @IsOptional()
@@ -7,6 +7,7 @@ export class UpdateLanternClaimDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   walkInName?: string | null;
 
   @IsOptional()

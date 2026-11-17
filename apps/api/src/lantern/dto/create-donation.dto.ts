@@ -1,5 +1,5 @@
 import { DonationType } from "@tms/shared";
-import { IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min } from "class-validator";
+import { IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min, MaxLength } from "class-validator";
 
 export class CreateDonationDto {
   @IsUUID()
@@ -11,6 +11,7 @@ export class CreateDonationDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   walkInName?: string;
 
   @IsEnum(DonationType)

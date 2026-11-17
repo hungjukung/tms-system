@@ -1,5 +1,5 @@
 import { CeremonySession } from "@tms/shared";
-import { IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min } from "class-validator";
+import { IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min, MaxLength } from "class-validator";
 
 export class RegisterCeremonyDto {
   @IsUUID()
@@ -11,6 +11,7 @@ export class RegisterCeremonyDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   walkInName?: string;
 
   @IsOptional()
@@ -71,5 +72,6 @@ export class RegisterCeremonyDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(50, { each: true })
   passengerNames?: string[];
 }

@@ -25,6 +25,7 @@ import { HouseholdService } from "../household/household.service";
 import { LanternService } from "../lantern/lantern.service";
 import { User } from "../auth/entities/user.entity";
 import { LedgerEntry } from "../finance/entities/ledger-entry.entity";
+import { Temple } from "../settings/entities/temple.entity";
 import { Ceremony } from "./entities/ceremony.entity";
 import { CeremonyRegistration } from "./entities/ceremony-registration.entity";
 import { CreateCeremonyDto } from "./dto/create-ceremony.dto";
@@ -51,6 +52,9 @@ export class CeremonyService {
   ) {}
 
   async createCeremony(dto: CreateCeremonyDto): Promise<CeremonyDto> {
+    if (!(await this.ceremonyRepo.manager.findOne(Temple, { where: { id: dto.templeId } }))) {
+      throw new NotFoundException("找不到此廟宇");
+    }
     const isJigai = dto.kind === CeremonyKind.JIGAI;
     if (isJigai && (!dto.morningCapacity || !dto.afternoonCapacity)) {
       throw new BadRequestException("祭改活動請設定上午場與下午場人數");
@@ -230,11 +234,13 @@ export class CeremonyService {
   ): Promise<{ registration: CeremonyRegistration; ceremony: Ceremony }> {
     const ceremony = await this.ceremonyRepo.findOne({ where: { id: dto.ceremonyId } });
     if (!ceremony) throw new NotFoundException("找不到活動");
+    this.assertRegistrationOpen(ceremony);
     if (dto.memberId) {
       await this.householdService.findMemberById(dto.memberId);
     }
 
     this.assertHasParticipantName(dto);
+    this.assertAmountMatchesFixedFee(ceremony, dto.amount, 1);
 
     if (ceremony.kind === CeremonyKind.JIGAI) {
       return this.createJigaiRegistrationRecord(dto, ceremony, userId);
@@ -337,6 +343,30 @@ export class CeremonyService {
     throw new ConflictException("報名人數眾多，取號失敗，請重新送出");
   }
 
+  /**
+   * 報名是否還在期限內：與「活動報名」頁的活動選單規則一致——有設報名期限的看期限（當天仍可報名），
+   * 沒設期限的看活動日期（當天仍可報名）。過了就不能再報名，不能只靠前端把活動從選單藏起來。
+   */
+  private assertRegistrationOpen(ceremony: Ceremony): void {
+    const today = this.formatLocalDate(new Date());
+    const lastDay = ceremony.registrationDeadline ?? ceremony.date;
+    if (String(lastDay) < today) {
+      throw new BadRequestException("此活動已過報名期限，無法報名");
+    }
+  }
+
+  /**
+   * 固定金額活動：收費必須剛好是「單價 × 人數」（單人 1、整戶為戶內人數、整桌為每桌人數、進香為座位數），
+   * 以「分」為單位比對避免小數誤差。隨喜活動不限金額。
+   */
+  private assertAmountMatchesFixedFee(ceremony: Ceremony, amount: number, headcount: number): void {
+    if (ceremony.feeMode !== CeremonyFeeMode.FIXED_AMOUNT || ceremony.fixedAmount == null) return;
+    const expected = Math.round(Number(ceremony.fixedAmount) * 100) * headcount;
+    if (Math.round(amount * 100) !== expected) {
+      throw new BadRequestException(`此活動為固定金額，${headcount} 人應收 NT$ ${expected / 100}`);
+    }
+  }
+
   /** 報名至少要知道是誰：必須選一位信徒，或填寫姓名（只有空白不算） */
   private assertHasParticipantName(dto: RegisterCeremonyDto): void {
     if (!dto.memberId && !dto.walkInName?.trim()) {
@@ -391,6 +421,7 @@ export class CeremonyService {
   }> {
     const ceremony = await this.ceremonyRepo.findOne({ where: { id: dto.ceremonyId } });
     if (!ceremony) throw new NotFoundException("找不到活動");
+    this.assertRegistrationOpen(ceremony);
     const seatIndexes = dto.seatIndexes ?? [];
     if (seatIndexes.length === 0) throw new BadRequestException("請選擇座位");
     if (new Set(seatIndexes).size !== seatIndexes.length) throw new BadRequestException("座位重複，請重新選擇");
@@ -399,6 +430,7 @@ export class CeremonyService {
       if (!this.isValidSeat(ceremony, seatIndex)) throw new BadRequestException("座位超出範圍");
     }
     this.assertHasParticipantName(dto);
+    this.assertAmountMatchesFixedFee(ceremony, dto.amount, seatIndexes.length);
     // 每個座位對應的信徒 id：第一個座位是報名者本人，其餘是同行乘客（空字串代表臨櫃、沒有對應信徒）
     const seatMemberIds = seatIndexes.map((_, i) =>
       i === 0 ? (dto.memberId ?? "") : (dto.passengerMemberIds?.[i] ?? "").trim(),
@@ -585,6 +617,7 @@ export class CeremonyService {
   }> {
     const ceremony = await this.ceremonyRepo.findOne({ where: { id: dto.ceremonyId } });
     if (!ceremony) throw new NotFoundException("找不到活動");
+    this.assertRegistrationOpen(ceremony);
 
     const members = await this.householdService.findMembersByHouseholdId(dto.householdId as string);
     if (members.length === 0) {
@@ -592,6 +625,7 @@ export class CeremonyService {
     }
 
     const headcount = members.length;
+    this.assertAmountMatchesFixedFee(ceremony, dto.amount, headcount);
     const perPersonAmount = dto.amount / headcount;
 
     if (ceremony.kind === CeremonyKind.JIGAI) {
@@ -733,6 +767,7 @@ export class CeremonyService {
   }> {
     const ceremony = await this.ceremonyRepo.findOne({ where: { id: dto.ceremonyId } });
     if (!ceremony) throw new NotFoundException("找不到活動");
+    this.assertRegistrationOpen(ceremony);
     if (ceremony.kind !== CeremonyKind.GENERAL || !ceremony.tableCount || !ceremony.seatsPerTable) {
       throw new BadRequestException("此活動未設定座位");
     }
@@ -741,6 +776,7 @@ export class CeremonyService {
     if (tableNumber < 1 || tableNumber > ceremony.tableCount) {
       throw new BadRequestException("桌號超出範圍");
     }
+    this.assertAmountMatchesFixedFee(ceremony, dto.amount, ceremony.seatsPerTable);
     if (dto.memberId) {
       await this.householdService.findMemberById(dto.memberId);
     }

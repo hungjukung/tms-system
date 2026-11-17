@@ -26,6 +26,7 @@ import { LanternWall } from "./entities/lantern-wall.entity";
 import { LanternSlot } from "./entities/lantern-slot.entity";
 import { LanternClaim } from "./entities/lantern-claim.entity";
 import { Donation } from "./entities/donation.entity";
+import { Temple } from "../settings/entities/temple.entity";
 import { Receipt } from "./entities/receipt.entity";
 import { ReceiptAuditLog } from "./entities/receipt-audit-log.entity";
 import { ClaimSlotDto } from "./dto/claim-slot.dto";
@@ -57,6 +58,9 @@ export class LanternService {
   ) {}
 
   async createWall(dto: CreateWallDto): Promise<LanternWallDto> {
+    if (!(await this.wallRepo.manager.findOne(Temple, { where: { id: dto.templeId } }))) {
+      throw new NotFoundException("找不到此廟宇");
+    }
     const wall = this.wallRepo.create({
       templeId: dto.templeId,
       name: dto.name,

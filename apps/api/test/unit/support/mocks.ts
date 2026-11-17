@@ -63,7 +63,11 @@ export function mockRepo() {
     increment: jest.fn().mockResolvedValue(undefined),
     query: jest.fn().mockResolvedValue([]),
     createQueryBuilder: jest.fn(() => qb),
-    manager: { transaction: jest.fn(async (work: (m: typeof txManager) => unknown) => work(txManager)) },
+    manager: {
+      transaction: jest.fn(async (work: (m: typeof txManager) => unknown) => work(txManager)),
+      // 查廟宇是否存在（建立活動／燈牆時使用）：預設存在，要測「廟宇不存在」時覆寫成 null
+      findOne: jest.fn().mockResolvedValue({ id: "t1" }),
+    },
   };
 }
 export type MockRepo = ReturnType<typeof mockRepo>;

@@ -1,9 +1,10 @@
 import { Gender, MemberTagType } from "@tms/shared";
-import { IsArray, IsDateString, IsEnum, IsOptional, IsString, IsUUID } from "class-validator";
+import { IsArray, IsDateString, IsEnum, IsOptional, IsString, IsUUID, MaxLength } from "class-validator";
 
 export class UpdateMemberDto {
   @IsOptional()
   @IsString()
+  @MaxLength(50)
   name?: string;
 
   @IsOptional()

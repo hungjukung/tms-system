@@ -136,6 +136,51 @@ describe("CeremonyService（白箱）", () => {
     });
   });
 
+  describe("報名期限與固定金額的把關（private helpers）", () => {
+    // it.each 的案例表在測試註冊階段就會執行，那時 beforeEach 還沒建立 service，所以這裡自己組日期字串
+    const shift = (days: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const todayText = () => shift(0);
+
+    it.each([
+      ["沒設期限、活動日期是今天", { date: todayText(), registrationDeadline: null }, false],
+      ["沒設期限、活動日期是昨天", { date: shift(-1), registrationDeadline: null }, true],
+      ["設了期限、期限是今天（活動已過）", { date: shift(-9), registrationDeadline: todayText() }, false],
+      ["設了期限、期限是昨天（活動還沒到）", { date: shift(9), registrationDeadline: shift(-1) }, true],
+      ["設了期限、期限在未來", { date: shift(-9), registrationDeadline: shift(1) }, false],
+    ])("%s", (_label, fields, blocked) => {
+      const call = () => internals.assertRegistrationOpen(general(fields));
+      if (blocked) expect(call).toThrow(new BadRequestException("此活動已過報名期限，無法報名"));
+      else expect(call).not.toThrow();
+    });
+
+    it("固定金額：以分比對（0.1 × 3 = 0.3 不會因浮點誤差失敗）；差一分就擋下", () => {
+      const fixed = (fixedAmount: string) => general({ feeMode: CeremonyFeeMode.FIXED_AMOUNT, fixedAmount });
+      expect(() => internals.assertAmountMatchesFixedFee(fixed("0.10"), 0.3, 3)).not.toThrow();
+      expect(() => internals.assertAmountMatchesFixedFee(fixed("0.10"), 0.31, 3)).toThrow("3 人應收 NT$ 0.3");
+      expect(() => internals.assertAmountMatchesFixedFee(fixed("500.00"), 500, 1)).not.toThrow();
+      expect(() => internals.assertAmountMatchesFixedFee(fixed("500.00"), 499.99, 1)).toThrow(BadRequestException);
+    });
+
+    it("隨喜、或固定金額卻沒有存單價：不檢查", () => {
+      expect(() => internals.assertAmountMatchesFixedFee(general(), 12345, 1)).not.toThrow();
+      expect(() =>
+        internals.assertAmountMatchesFixedFee(general({ feeMode: CeremonyFeeMode.FIXED_AMOUNT, fixedAmount: null }), 1, 1),
+      ).not.toThrow();
+    });
+
+    it("建立活動：廟宇不存在 404，不寫入資料庫；存在就建立", async () => {
+      ceremonyRepo.manager.findOne.mockResolvedValueOnce(null);
+      await expect(
+        service.createCeremony({ templeId: "x", name: "a", date: "2099-01-01", feeMode: CeremonyFeeMode.FREE_WILL } as never),
+      ).rejects.toThrow(new NotFoundException("找不到此廟宇"));
+      expect(ceremonyRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
   // ───────────────────────────── 建立活動 ─────────────────────────────
   describe("createCeremony", () => {
     const dto = (overrides: object = {}) => ({

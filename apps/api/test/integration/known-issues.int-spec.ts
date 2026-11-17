@@ -7,7 +7,7 @@ const GHOST_ID = "00000000-0000-4000-8000-000000000000";
 /**
  * 黑箱測試先前發現的問題，修正後轉成正式的回歸測試；仍未決定的規則留在最後面用 it.todo 記錄。
  */
-describe("先前發現問題的回歸測試", () => {
+describe("先前發現問題的回歸測試與伺服器端把關", () => {
   let app: INestApplication;
   let fx: BaseFixture;
   let director: ReturnType<typeof api>;
@@ -238,10 +238,135 @@ describe("先前發現問題的回歸測試", () => {
     });
   });
 
-  describe("尚未決定的規則（伺服器目前沒有把關，只靠前端畫面限制）", () => {
-    it.todo("報名期限已過（或活動日期已過）的活動，直接呼叫 API 仍然可以報名");
-    it.todo("固定金額的活動，API 接受任意金額（例如固定 500 元的活動只收 1 元）");
-    it.todo("建立活動／燈牆時，templeId 可以是不存在的廟宇");
-    it.todo("信徒姓名沒有長度上限（5000 個字也能建立）");
+  describe("伺服器端把關（不能只靠前端畫面限制）", () => {
+    const day = (offset: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const create = async (overrides: Record<string, unknown> = {}) =>
+      (
+        await director
+          .post("/ceremony/ceremonies", { templeId: fx.templeId, name: "法會", date: day(10), feeMode: "FREE_WILL", ...overrides })
+          .expect(201)
+      ).body;
+    const submit = (registration: Record<string, unknown>) =>
+      volunteer.post("/activities/submit", { pendingCeremonyRegistrations: [registration] });
+
+    describe("報名期限", () => {
+      it("活動日期已過、沒設報名期限：所有報名方式都 400", async () => {
+        const c = await create({ date: day(-1), tableCount: 1, seatsPerTable: 2 });
+        const m = (await volunteer.post("/members", { householdAddress: "A", name: "王小明", gender: "MALE" }).expect(201)).body;
+        const base = { ceremonyId: c.id, amount: 0 };
+        const attempts = [
+          volunteer.post("/ceremony/registrations", { ...base, walkInName: "甲" }),
+          submit({ ...base, walkInName: "甲", seatIndex: 1 }),
+          submit({ ...base, householdId: m.householdId }),
+          submit({ ...base, walkInName: "甲", tableNumber: 1 }),
+          submit({ ...base, walkInName: "甲", seatIndexes: [1] }),
+        ];
+        for (const res of await Promise.all(attempts)) {
+          expect(res.status).toBe(400);
+          expect(res.body.message).toBe("此活動已過報名期限，無法報名");
+        }
+        expect((await volunteer.get("/lantern/receipts").expect(200)).body.total).toBe(0);
+      });
+
+      it("有設報名期限：以期限為準（期限已過即使活動還沒到也不行；期限當天可以）", async () => {
+        const expired = await create({ date: day(10), registrationDeadline: day(-1) });
+        await volunteer.post("/ceremony/registrations", { ceremonyId: expired.id, walkInName: "甲", amount: 1 }).expect(400);
+        const lastDay = await create({ date: day(-5), registrationDeadline: day(0) });
+        await volunteer.post("/ceremony/registrations", { ceremonyId: lastDay.id, walkInName: "甲", amount: 1 }).expect(201);
+      });
+
+      it("邊界：活動日期就是今天（沒設期限）還可以報名", async () => {
+        const today = await create({ date: day(0) });
+        await volunteer.post("/ceremony/registrations", { ceremonyId: today.id, walkInName: "甲", amount: 1 }).expect(201);
+      });
+    });
+
+    describe("固定金額", () => {
+      it("單人：金額必須剛好等於單價（少一元、多一元都 400）", async () => {
+        const c = await create({ feeMode: "FIXED_AMOUNT", fixedAmount: 500 });
+        const reg = (amount: number) => volunteer.post("/ceremony/registrations", { ceremonyId: c.id, walkInName: "甲", amount });
+        const wrong = await reg(499).expect(400);
+        expect(wrong.body.message).toBe("此活動為固定金額，1 人應收 NT$ 500");
+        await reg(501).expect(400);
+        await reg(0).expect(400);
+        await reg(500).expect(201);
+      });
+
+      it("整戶：單價 × 戶內人數", async () => {
+        const c = await create({ feeMode: "FIXED_AMOUNT", fixedAmount: 300 });
+        const a = (await volunteer.post("/members", { householdAddress: "陳家", name: "陳一", gender: "MALE" }).expect(201)).body;
+        await volunteer.post("/members", { householdAddress: "陳家", name: "陳二", gender: "MALE" }).expect(201);
+        await submit({ ceremonyId: c.id, householdId: a.householdId, amount: 300 }).expect(400);
+        await submit({ ceremonyId: c.id, householdId: a.householdId, amount: 600 }).expect(201);
+      });
+
+      it("認領整桌：單價 × 每桌人數", async () => {
+        const c = await create({ feeMode: "FIXED_AMOUNT", fixedAmount: 100, tableCount: 2, seatsPerTable: 3 });
+        await submit({ ceremonyId: c.id, walkInName: "甲", tableNumber: 1, amount: 100 }).expect(400);
+        await submit({ ceremonyId: c.id, walkInName: "甲", tableNumber: 1, amount: 300 }).expect(201);
+      });
+
+      it("進香：單價 × 座位數；祭改：單價 × 1", async () => {
+        const bus = await create({ kind: "PILGRIMAGE", feeMode: "FIXED_AMOUNT", fixedAmount: 800 });
+        await submit({ ceremonyId: bus.id, walkInName: "甲", seatIndexes: [1, 2], amount: 800 }).expect(400);
+        await submit({ ceremonyId: bus.id, walkInName: "甲", seatIndexes: [1, 2], amount: 1600 }).expect(201);
+
+        const jigai = await create({ kind: "JIGAI", feeMode: "FIXED_AMOUNT", fixedAmount: 300, morningCapacity: 5, afternoonCapacity: 5 });
+        await submit({ ceremonyId: jigai.id, walkInName: "甲", session: "AM", amount: 1 }).expect(400);
+        await submit({ ceremonyId: jigai.id, walkInName: "甲", session: "AM", amount: 300 }).expect(201);
+      });
+
+      it("小數單價也用「分」比對，不會有浮點誤差", async () => {
+        const c = await create({ feeMode: "FIXED_AMOUNT", fixedAmount: 0.1 });
+        const m = (await volunteer.post("/members", { householdAddress: "李家", name: "李一", gender: "MALE" }).expect(201)).body;
+        for (const name of ["李二", "李三"]) await volunteer.post("/members", { householdAddress: "李家", name, gender: "MALE" }).expect(201);
+        await submit({ ceremonyId: c.id, householdId: m.householdId, amount: 0.3 }).expect(201);
+      });
+
+      it("隨喜活動不限金額（包含 0）", async () => {
+        const c = await create();
+        await volunteer.post("/ceremony/registrations", { ceremonyId: c.id, walkInName: "甲", amount: 0 }).expect(201);
+        await volunteer.post("/ceremony/registrations", { ceremonyId: c.id, walkInName: "乙", amount: 12345 }).expect(201);
+      });
+    });
+
+    describe("廟宇必須存在", () => {
+      it("建立活動、燈牆時廟宇不存在：404", async () => {
+        const res = await director
+          .post("/ceremony/ceremonies", { templeId: GHOST_ID, name: "x", date: day(1), feeMode: "FREE_WILL" })
+          .expect(404);
+        expect(res.body.message).toBe("找不到此廟宇");
+        await director.post("/lantern/walls", { templeId: GHOST_ID, name: "牆", year: 2026, slotPrice: 600 }).expect(404);
+        expect((await volunteer.get("/ceremony/ceremonies").expect(200)).body).toEqual([]);
+        expect((await volunteer.get("/lantern/walls").expect(200)).body).toEqual([]);
+      });
+    });
+
+    describe("姓名長度上限 50 字", () => {
+      const name = (n: number) => "名".repeat(n);
+
+      it("信徒姓名：50 字可以、51 字 400（新增與編輯都一樣）", async () => {
+        const m = (await volunteer.post("/members", { householdAddress: "A", name: name(50), gender: "MALE" }).expect(201)).body;
+        await volunteer.post("/members", { householdAddress: "A", name: name(51), gender: "MALE" }).expect(400);
+        await volunteer.patch(`/members/${m.id}`, { name: name(51) }).expect(400);
+        await volunteer.patch(`/members/${m.id}`, { name: name(10) }).expect(200);
+      });
+
+      it("臨櫃姓名：活動報名、點燈認領、捐款、送禮、同行乘客都有上限", async () => {
+        const c = await create({ kind: "PILGRIMAGE" });
+        await volunteer.post("/ceremony/registrations", { ceremonyId: c.id, walkInName: name(51), amount: 0 }).expect(400);
+        await submit({ ceremonyId: c.id, walkInName: "甲", seatIndexes: [1, 2], amount: 0, passengerNames: ["", name(51)] }).expect(400);
+        await submit({ ceremonyId: c.id, walkInName: name(50), seatIndexes: [1], amount: 0 }).expect(201);
+        await volunteer.post("/lantern/claims", { slotId: GHOST_ID, walkInName: name(51), amount: 1 }).expect(400);
+        await volunteer.post("/lantern/donations", { templeId: fx.templeId, walkInName: name(51), type: DonationType.GENERAL, amount: 1 }).expect(400);
+        await volunteer
+          .post("/activities/submit", { gift: { templeId: fx.templeId, walkInName: name(51), items: [{ giftType: GiftType.WATER, quantity: 1 }] } })
+          .expect(400);
+      });
+    });
   });
 });
