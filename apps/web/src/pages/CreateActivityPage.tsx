@@ -97,6 +97,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
   const isJigai = kind === CeremonyKind.JIGAI;
   const isPilgrimage = kind === CeremonyKind.PILGRIMAGE;
   const usesTables = kind === CeremonyKind.GENERAL;
+  const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const feeMode = Form.useWatch("feeMode", form) ?? CeremonyFeeMode.FREE_WILL;
@@ -108,6 +109,11 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ceremonies"] });
       form.resetFields();
+      message.success("已建立活動");
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      message.error(Array.isArray(msg) ? msg.join("；") : (msg ?? "建立失敗，請重試"));
     },
   });
 
@@ -122,8 +128,10 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
             templeId,
             name: values.name,
             date: (values.date as Dayjs).format("YYYY-MM-DD"),
-            feeMode: values.feeMode,
-            fixedAmount: values.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? values.fixedAmount : undefined,
+            // 進香的收費由房型決定，畫面上沒有收費方式欄位（不會出現在表單送出的值裡），固定送隨喜
+            feeMode: isPilgrimage ? CeremonyFeeMode.FREE_WILL : values.feeMode,
+            fixedAmount:
+              !isPilgrimage && values.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? values.fixedAmount : undefined,
             description: values.description,
             tableCount: usesTables ? values.tableCount || undefined : undefined,
             seatsPerTable: usesTables ? values.seatsPerTable || undefined : undefined,
@@ -483,8 +491,9 @@ function CeremonyListCard({ templeId }: { templeId: string }) {
             dataIndex: "feeMode",
             render: (m: CeremonyFeeMode, record: CeremonyDto) => (
               <Tag>
-                {feeModeLabel[m]}
-                {m === CeremonyFeeMode.FIXED_AMOUNT ? ` NT$${record.fixedAmount}` : ""}
+                {record.roomTypes?.length
+                  ? "依房型"
+                  : `${feeModeLabel[m]}${m === CeremonyFeeMode.FIXED_AMOUNT ? ` NT$${record.fixedAmount}` : ""}`}
               </Tag>
             ),
           },
@@ -689,8 +698,11 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
         <Descriptions bordered size="small" column={2}>
           <Descriptions.Item label="日期">{ceremony.date}</Descriptions.Item>
           <Descriptions.Item label="收費方式">
-            {feeModeLabel[ceremony.feeMode]}
-            {ceremony.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? ` NT$${ceremony.fixedAmount}` : ""}
+            {ceremony.roomTypes?.length
+              ? `依房型：${ceremony.roomTypes.map((r) => `${r.name} ${r.capacity}人 NT$${r.fee}`).join("、")}`
+              : `${feeModeLabel[ceremony.feeMode]}${
+                  ceremony.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? ` NT$${ceremony.fixedAmount}` : ""
+                }`}
           </Descriptions.Item>
           <Descriptions.Item label="報名期限" span={2}>
             {ceremony.registrationDeadline ? (

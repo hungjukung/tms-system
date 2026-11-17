@@ -175,6 +175,63 @@ test.describe("活動建立與報名", () => {
     await expect(modalAgain.getByRole("button", { name: /確認選位/ })).toBeDisabled();
   });
 
+  test("總幹事在畫面上建立有房型的進香活動 → 選雙人房自動帶 2 位參加者與房型費用 → 收據備註帶房型", async ({ page }) => {
+    const name = `進香房型-${Date.now()}`;
+
+    // 1. 在「建立活動」頁建立進香活動：畫面上沒有收費方式欄位，改設定房型與費用
+    await loginWithTemple(page, "director");
+    await page.locator(".ant-menu").getByText("建立活動", { exact: true }).click();
+    await radioButton(page, /^進香$/).click();
+    await expect(page.getByText("新增進香活動")).toBeVisible();
+    const createCard = page.locator(".ant-card", { hasText: "新增進香活動" });
+    await expect(createCard.getByText("收費方式", { exact: true })).toHaveCount(0);
+    await page.getByLabel("活動名稱").fill(name);
+    await page.getByPlaceholder("房型，例如：雙人房").nth(0).fill("雙人房");
+    await page.getByPlaceholder("人數").nth(0).fill("2");
+    await page.getByPlaceholder("費用").nth(0).fill("3000");
+    await page.getByRole("button", { name: /新增房型/ }).click();
+    await page.getByPlaceholder("房型，例如：雙人房").nth(1).fill("四人房");
+    await page.getByPlaceholder("人數").nth(1).fill("4");
+    await page.getByPlaceholder("費用").nth(1).fill("5200");
+    await page.getByRole("button", { name: "建立活動" }).click();
+
+    await expect(page.getByText("已建立活動")).toBeVisible();
+    const row = page.locator(".ant-table-row", { hasText: name });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("依房型");
+
+    // 2. 報名：選雙人房後參加者自動變成 2 位、不能增減，金額帶入房型費用且不能改
+    await openCeremonyRegistration(page, name);
+    await selectOption(page, "房型", "雙人房（2 人，NT$ 3000）");
+    const participant = (n: number) => page.locator(".ant-card-small", { hasText: `參加者 ${n}` });
+    await expect(participant(2)).toBeVisible();
+    await expect(participant(3)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /新增參加者/ })).toHaveCount(0);
+    const amount = page.getByRole("spinbutton", { name: "金額" });
+    await expect(amount).toHaveValue("3000");
+    await expect(amount).toBeDisabled();
+
+    await radioButton(participant(1), "臨櫃香客").click();
+    await participant(1).getByPlaceholder("姓名").fill("阿土伯");
+    await radioButton(participant(2), "臨櫃香客").click();
+    await participant(2).getByPlaceholder("姓名").fill("阿土嫂");
+
+    await page.getByRole("button", { name: "選擇遊覽車座位（需選 2 位）" }).click();
+    const modal = page.locator(".ant-modal", { hasText: "遊覽車選位" });
+    await modal.getByTitle("5排1號（空位）").click();
+    await modal.getByTitle("5排2號（空位）").click();
+    await modal.getByRole("button", { name: /確認選位/ }).click();
+
+    await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
+    await page.locator(".ant-modal-confirm").getByRole("button").click();
+    await expect(page.getByText(`${name}（雙人房　阿土伯 5排1號、阿土嫂 5排2號）`)).toBeVisible();
+
+    // 3. 收據：金額是房型費用，左邊備註前面帶房型
+    const receipt = await submitAndGetReceipt(page);
+    await expect(receipt.locator("body")).toContainText("NT$ 3,000");
+    await expect(receipt.locator("body")).toContainText("雙人房，座位｜5排1號 阿土伯、5排2號 阿土嫂");
+  });
+
   test("進香：選好座位後又增加參加者，已選的座位會清空要求重選", async ({ page, request }) => {
     const api = await apiAs(request, "director");
     const name = `進香重選-${Date.now()}`;
