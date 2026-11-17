@@ -476,7 +476,8 @@ export class CeremonyService {
 
   /**
    * 進香有設定房型時：必須選擇房型，參加人數 1 人到該房型每間人數上限都可以（例如雙人房可以只住 1 人），
-   * 收費為該房型的費用（整間房總價）。回傳所選房型；活動沒設定房型時回傳 null。
+   * 房型費用是「每人」的價錢，應收金額 = 每人費用 × 參加人數（以「分」比對避免小數誤差）。
+   * 回傳所選房型；活動沒設定房型時回傳 null。
    */
   private resolveRoomType(ceremony: Ceremony, dto: RegisterCeremonyDto, headcount: number): PilgrimageRoomType | null {
     if (!ceremony.roomTypes?.length) return null;
@@ -485,8 +486,9 @@ export class CeremonyService {
     if (headcount > room.capacity) {
       throw new BadRequestException(`${room.name}每間最多 ${room.capacity} 人，目前登錄 ${headcount} 人`);
     }
-    if (Math.round(dto.amount * 100) !== Math.round(room.fee * 100)) {
-      throw new BadRequestException(`${room.name}費用為 NT$ ${room.fee}`);
+    const expectedCents = Math.round(room.fee * 100) * headcount;
+    if (Math.round(dto.amount * 100) !== expectedCents) {
+      throw new BadRequestException(`${room.name}每人 NT$ ${room.fee}，${headcount} 人應收 NT$ ${expectedCents / 100}`);
     }
     return { ...room, roomCount: room.roomCount ?? null };
   }
@@ -537,7 +539,7 @@ export class CeremonyService {
    * 進香報名：一次登錄 1 位以上參加者（第 1 位是收據上的報名者），每位參加者各建立一筆報名紀錄，
    * 第 1 位掛上全部金額，其餘金額為 0，不會重複計入財務報表；同行參加者可以是已建檔信徒（記在該信徒名下）
    * 或臨櫃姓名（未填就沿用報名者姓名）。不選遊覽車座位。
-   * 有設定房型時：人數 1 人到房型上限都可以，金額為房型費用，自動配給該房型最小的空房號（第幾間），
+   * 有設定房型時：人數 1 人到房型上限都可以，金額為房型每人費用 × 人數，自動配給該房型最小的空房號（第幾間），
    * 房型訂滿就不能報名；總人數不能超過遊覽車可載人數。先鎖住活動那一列再計算剩餘房間與座位，
    * 多個櫃台同時報名也不會超訂。
    */

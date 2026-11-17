@@ -819,7 +819,7 @@ describe("CeremonyService（白箱）", () => {
       ceremonyId: "c1",
       walkInName: "阿土伯",
       roomType: "雙人房",
-      amount: 3000,
+      amount: 6000, // 每人 3000 × 2 人
       passengerMemberIds: ["", ""],
       passengerNames: ["", "阿土嫂"],
       ...overrides,
@@ -844,7 +844,7 @@ describe("CeremonyService（白箱）", () => {
       ["沒選房型", { roomType: undefined }, "請選擇房型"],
       ["房型不存在", { roomType: "豪華房" }, "請選擇房型"],
       ["人數超過每間上限", { passengerMemberIds: ["", "", ""], passengerNames: ["", "乙", "丙"] }, "雙人房每間最多 2 人，目前登錄 3 人"],
-      ["金額不是房型費用", { amount: 1500 }, "雙人房費用為 NT$ 3000"],
+      ["金額不是每人費用 × 人數", { amount: 3000 }, "雙人房每人 NT$ 3000，2 人應收 NT$ 6000"],
       ["信徒 id 格式不對", { passengerMemberIds: ["", "abc"] }, "信徒資料錯誤，請重新選擇"],
       ["同行者跟報名者是同一個信徒", { memberId: MEMBER_A, passengerMemberIds: ["", MEMBER_A] }, "同一位信徒不能重複報名，請檢查參加者名單"],
     ])("%s：400，不開交易、不寫入資料", async (_label, overrides, message) => {
@@ -869,7 +869,7 @@ describe("CeremonyService（白箱）", () => {
           walkInName: undefined,
           memberId: MEMBER_A,
           roomType: "四人房",
-          amount: 5200,
+          amount: 15600,
           passengerMemberIds: ["", MEMBER_B, ""],
           passengerNames: ["", "", "  陳小美  "],
           wishText: "平安",
@@ -877,7 +877,7 @@ describe("CeremonyService（白箱）", () => {
         ceremony,
       );
       expect(savedRows().map((r: any) => [r.memberId, r.walkInName, r.amount, r.wishText, r.roomType, r.roomNumber, r.seatIndex])).toEqual([
-        [MEMBER_A, null, "5200.00", "平安", "四人房", 1, undefined],
+        [MEMBER_A, null, "15600.00", "平安", "四人房", 1, undefined],
         [MEMBER_B, null, "0.00", null, "四人房", 1, undefined],
         [null, "陳小美", "0.00", null, "四人房", 1, undefined],
       ]);
@@ -889,8 +889,11 @@ describe("CeremonyService（白箱）", () => {
       });
     });
 
-    it("雙人房只住 1 人：項目不加「*n人」，備註只印房型", async () => {
-      const result = await register({ passengerMemberIds: undefined, passengerNames: undefined });
+    it("雙人房只住 1 人：只收 1 人份，項目不加「*n人」，備註只印房型", async () => {
+      await expect(register({ passengerMemberIds: undefined, passengerNames: undefined })).rejects.toThrow(
+        "雙人房每人 NT$ 3000，1 人應收 NT$ 3000",
+      );
+      const result = await register({ amount: 3000, passengerMemberIds: undefined, passengerNames: undefined });
       expect(savedRows()).toHaveLength(1);
       expect(result).toMatchObject({ description: "進香", note: "雙人房" });
     });
@@ -946,7 +949,7 @@ describe("CeremonyService（白箱）", () => {
     it("遊覽車：已報名人數 + 這次人數超過可載人數 409；剛好坐滿可以；沒設台數不檢查", async () => {
       registrationRepo.txManager.count.mockResolvedValue(39);
       await expect(register()).rejects.toThrow(new ConflictException("遊覽車座位不足：1 台共 40 位，已報名 39 位，剩 1 位"));
-      await register({ passengerMemberIds: undefined, passengerNames: undefined });
+      await register({ amount: 3000, passengerMemberIds: undefined, passengerNames: undefined });
       expect(savedRows()).toHaveLength(1);
 
       registrationRepo.txManager.count.mockClear();

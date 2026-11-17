@@ -499,7 +499,7 @@ export interface CeremonyExpenseDto {
   occurredAt: string;
 }
 
-/** 進香房型：每間房最多入住人數、費用（整間房的總價）與可預訂的房間數 */
+/** 進香房型：每間房最多入住人數、每人費用（應收 = 每人費用 × 參加人數）與可預訂的房間數 */
 export interface PilgrimageRoomType {
   name: string;
   /** 每間房最多入住人數（報名人數可以少於此數，但不能超過） */

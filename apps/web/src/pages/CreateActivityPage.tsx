@@ -94,7 +94,7 @@ function registrationSeatText(r: CeremonyRegistrationDto, kind: CeremonyKind): s
   return r.seatNumber;
 }
 
-/** 進香房型清單：每列是房型名稱、每間最多人數、費用（整間房）與間數，至少要有一種房型 */
+/** 進香房型清單：每列是房型名稱、每間最多人數、每人費用與間數，至少要有一種房型 */
 function RoomTypesField() {
   return (
     <Form.List
@@ -108,7 +108,7 @@ function RoomTypesField() {
       ]}
     >
       {(fields, { add, remove }, { errors }) => (
-        <Form.Item label="房型（報名人數不可超過每間人數，費用為整間房總價）" required>
+        <Form.Item label="房型（報名人數不可超過每間人數，費用為每人價格，報名時依人數計算）" required>
           <Space direction="vertical" style={{ width: "100%" }}>
             {fields.map((field) => (
               <Space key={field.key} align="baseline" wrap>
@@ -118,8 +118,8 @@ function RoomTypesField() {
                 <Form.Item name={[field.name, "capacity"]} rules={[{ required: true, message: "請輸入每間人數" }]} noStyle>
                   <InputNumber placeholder="每間人數" min={1} max={45} addonBefore="每間最多" addonAfter="人" style={{ width: 190 }} />
                 </Form.Item>
-                <Form.Item name={[field.name, "fee"]} rules={[{ required: true, message: "請輸入費用" }]} noStyle>
-                  <InputNumber placeholder="費用" min={0} addonBefore="NT$" style={{ width: 150 }} />
+                <Form.Item name={[field.name, "fee"]} rules={[{ required: true, message: "請輸入每人費用" }]} noStyle>
+                  <InputNumber placeholder="每人費用" min={0} addonBefore="每人 NT$" style={{ width: 190 }} />
                 </Form.Item>
                 <Form.Item name={[field.name, "roomCount"]} rules={[{ required: true, message: "請輸入間數" }]} noStyle>
                   <InputNumber placeholder="間數" min={1} max={500} addonBefore="共" addonAfter="間" style={{ width: 150 }} />
@@ -722,7 +722,7 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
           <Descriptions.Item label="日期">{ceremony.date}</Descriptions.Item>
           <Descriptions.Item label="收費方式">
             {ceremony.roomTypes?.length
-              ? `依房型：${ceremony.roomTypes.map((r) => `${r.name} ${r.capacity}人 NT$${r.fee}`).join("、")}`
+              ? `依房型每人計價：${ceremony.roomTypes.map((r) => `${r.name}（每間 ${r.capacity} 人）每人 NT$${r.fee}`).join("、")}`
               : `${feeModeLabel[ceremony.feeMode]}${
                   ceremony.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? ` NT$${ceremony.fixedAmount}` : ""
                 }`}

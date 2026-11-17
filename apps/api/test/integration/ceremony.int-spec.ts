@@ -472,12 +472,12 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       createCeremony({ name: "進香", kind: CeremonyKind.PILGRIMAGE, busCount: 1, roomTypes: rooms, ...overrides });
     const report = async (ceremonyId: string) =>
       (await volunteer.get(`/ceremony/ceremonies/${ceremonyId}/report`).expect(200)).body;
-    /** 一筆進香報名：第 1 位是報名者，others 是同行臨櫃參加者姓名 */
-    const pilgrim = (ceremonyId: string, roomType: string, amount: number, others: string[] = [], payer = "王小明") => ({
+    /** 一筆進香報名：第 1 位是報名者，others 是同行臨櫃參加者姓名；金額 = 房型每人費用 × 人數 */
+    const pilgrim = (ceremonyId: string, roomType: string, feePerPerson: number, others: string[] = [], payer = "王小明") => ({
       ceremonyId,
       walkInName: payer,
       roomType,
-      amount,
+      amount: feePerPerson * (1 + others.length),
       passengerMemberIds: ["", ...others.map(() => "")],
       passengerNames: ["", ...others],
     });
@@ -523,7 +523,7 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       await post({ roomTypes: [{ name: "雙人房", capacity: 2, fee: 3000 }] }).expect(400); // 沒填間數
     });
 
-    it("雙人房只住 1 人也可以：金額是整間房費用，收據備註印房型，名單顯示第 1 間", async () => {
+    it("雙人房只住 1 人也可以：只收 1 人的費用，收據備註印房型，名單顯示第 1 間", async () => {
       const c = await createPilgrimage();
       const res = await submitRegistrations([pilgrim(c.id, "雙人房", 3000)]).expect(201);
       expect(res.body.receipt).toMatchObject({ amount: 3000, payerName: "王小明" });
@@ -536,7 +536,7 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       expect(r.ceremony.roomTypes.find((x: { name: string }) => x.name === "雙人房").roomsBooked).toBe(1);
     });
 
-    it("多位參加者住同一間：信徒記在各自名下、臨櫃用填的姓名，金額只記在報名者身上", async () => {
+    it("多位參加者住同一間：每人計價（3 人 × 5200），信徒記在各自名下、臨櫃用填的姓名，金額只記在報名者身上", async () => {
       const c = await createPilgrimage();
       const token = fx.tokens[UserRole.VOLUNTEER];
       const payer = await createMember(app, token, "王小明");
@@ -547,7 +547,7 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
           ceremonyId: c.id,
           memberId: payer.id,
           roomType: "四人房",
-          amount: 5200,
+          amount: 15600,
           passengerMemberIds: ["", friend.id, ""],
           passengerNames: ["", "", "陳小美"],
         },
@@ -555,13 +555,13 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
 
       expect(res.body.receipt.items[0]).toMatchObject({
         description: "進香*3人",
-        amount: 5200,
+        amount: 15600,
         note: "四人房｜王小明、李大華、陳小美",
       });
-      expect(res.body.ceremonyRegistrations.map((r: { amount: number }) => r.amount)).toEqual([5200, 0, 0]);
+      expect(res.body.ceremonyRegistrations.map((r: { amount: number }) => r.amount)).toEqual([15600, 0, 0]);
 
       const r = await report(c.id);
-      expect(r).toMatchObject({ registrationCount: 3, totalAmount: 5200 });
+      expect(r).toMatchObject({ registrationCount: 3, totalAmount: 15600 });
       expect(r.registrations.map((x: { roomType: string; roomNumber: number }) => `${x.roomType}${x.roomNumber}`)).toEqual([
         "四人房1",
         "四人房1",
@@ -584,7 +584,8 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
     it.each([
       ["沒選房型", { roomType: undefined }, "請選擇房型"],
       ["房型不存在", { roomType: "豪華房" }, "請選擇房型"],
-      ["金額不是房型費用", { amount: 2999 }, "雙人房費用為 NT$ 3000"],
+      ["金額不是每人費用 × 人數", { amount: 5999 }, "雙人房每人 NT$ 3000，2 人應收 NT$ 6000"],
+      ["2 人卻只收 1 人份（整間價）", { amount: 3000 }, "雙人房每人 NT$ 3000，2 人應收 NT$ 6000"],
       ["人數超過每間上限（雙人房 3 人）", { passengerMemberIds: ["", "", ""], passengerNames: ["", "乙", "丙"] }, "雙人房每間最多 2 人，目前登錄 3 人"],
     ])("%s → 400，而且沒有建立任何報名", async (_label, overrides, message) => {
       const c = await createPilgrimage();
@@ -635,7 +636,7 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
     it("同一位信徒不能重複登錄；信徒不存在 404；信徒 id 格式錯誤 400", async () => {
       const c = await createPilgrimage();
       const m = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "王小明");
-      const base = { ceremonyId: c.id, memberId: m.id, roomType: "雙人房", amount: 3000, passengerNames: ["", ""] };
+      const base = { ceremonyId: c.id, memberId: m.id, roomType: "雙人房", amount: 6000, passengerNames: ["", ""] };
 
       const dup = await submitRegistrations([{ ...base, passengerMemberIds: ["", m.id] }]).expect(400);
       expect(dup.body.message).toContain("同一位信徒不能重複報名");

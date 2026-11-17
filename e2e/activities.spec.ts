@@ -107,12 +107,12 @@ test.describe("活動建立與報名", () => {
     await page.getByLabel(/遊覽車台數/).fill("1");
     await page.getByPlaceholder("房型，例如：雙人房").nth(0).fill("雙人房");
     await page.getByPlaceholder("每間人數").nth(0).fill("2");
-    await page.getByPlaceholder("費用").nth(0).fill("3000");
+    await page.getByPlaceholder("每人費用").nth(0).fill("3000");
     await page.getByPlaceholder("間數").nth(0).fill("2");
     await page.getByRole("button", { name: /新增房型/ }).click();
     await page.getByPlaceholder("房型，例如：雙人房").nth(1).fill("四人房");
     await page.getByPlaceholder("每間人數").nth(1).fill("4");
-    await page.getByPlaceholder("費用").nth(1).fill("5200");
+    await page.getByPlaceholder("每人費用").nth(1).fill("5200");
     await page.getByPlaceholder("間數").nth(1).fill("1");
     await page.getByRole("button", { name: "建立活動" }).click();
 
@@ -122,9 +122,9 @@ test.describe("活動建立與報名", () => {
     await expect(row).toContainText("遊覽車 0/40 人");
     await expect(row).toContainText("雙人房 0/2 間");
 
-    // 2. 報名：選雙人房，金額帶入房費且不能改；只登錄 1 位也可以；沒有遊覽車選位
+    // 2. 報名：選雙人房，金額 = 每人費用 × 人數且不能改；只登錄 1 位也可以；沒有遊覽車選位
     await openCeremonyRegistration(page, name);
-    await selectOption(page, "房型", "雙人房（每間最多 2 人，NT$ 3000，剩 2 間）");
+    await selectOption(page, "房型", "雙人房（每間最多 2 人，每人 NT$ 3000，剩 2 間）");
     const amount = page.getByRole("spinbutton", { name: "金額" });
     await expect(amount).toHaveValue("3000");
     await expect(amount).toBeDisabled();
@@ -136,6 +136,13 @@ test.describe("活動建立與報名", () => {
     await radioButton(participant(1), "臨櫃香客").click();
     await participant(1).getByPlaceholder("姓名").fill("阿土伯");
     await expect(page.getByText("雙人房每間最多 2 人，目前 1 人")).toBeVisible();
+    await expect(page.getByText("雙人房每人 NT$ 3000 × 1 人")).toBeVisible();
+
+    // 加第 2 位金額變 6000，移除後回到 3000
+    await page.getByRole("button", { name: /新增參加者/ }).click();
+    await expect(amount).toHaveValue("6000");
+    await participant(2).getByRole("button", { name: /移\s?除/ }).click();
+    await expect(amount).toHaveValue("3000");
 
     await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
     await expect(page.getByText(`${name}（雙人房　阿土伯）`)).toBeVisible();
@@ -192,12 +199,12 @@ test.describe("活動建立與報名", () => {
     }
     await expect(page.getByText("四人房每間最多 4 人，目前 4 人")).toBeVisible();
     await expect(page.getByRole("button", { name: /新增參加者/ })).toHaveCount(0);
-    await expect(page.getByRole("spinbutton", { name: "金額" })).toHaveValue("5200");
+    await expect(page.getByRole("spinbutton", { name: "金額" })).toHaveValue("20800"); // 每人 5200 × 4 人
 
     await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
     await expect(page.getByText(`${name}（四人房　甲、乙、丙、丁）`)).toBeVisible();
     const receipt = await submitAndGetReceipt(page);
-    await expect(receipt.locator("body")).toContainText("NT$ 5,200");
+    await expect(receipt.locator("body")).toContainText("NT$ 20,800");
     await expect(receipt.locator("body")).toContainText("四人房｜甲、乙、丙、丁");
 
     // 後端：四人房已訂 1 間，4 個人都在第 1 間

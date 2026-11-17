@@ -775,12 +775,12 @@ function CeremonyRegistrationFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMultiSeatMode, participantCount, selectedCeremony]);
 
-  // 進香房型：選了房型就自動帶入房型費用（整間房），參加人數不用剛好等於房型人數
+  // 進香房型：每人計價，金額自動算成「房型每人費用 × 參加人數」；參加人數不用剛好等於房型人數
   useEffect(() => {
     if (!isMultiSeatMode || !hasRooms) return;
-    form.setFieldValue("amount", selectedRoom ? selectedRoom.fee : undefined);
+    form.setFieldValue("amount", selectedRoom ? selectedRoom.fee * Math.max(participantCount, 1) : undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMultiSeatMode, hasRooms, selectedRoom]);
+  }, [isMultiSeatMode, hasRooms, selectedRoom, participantCount]);
 
   const readyToAdd =
     !!ceremonyId &&
@@ -987,7 +987,7 @@ function CeremonyRegistrationFields({
                 const left = roomsLeftOf(r);
                 return {
                   value: r.name,
-                  label: `${r.name}（每間最多 ${r.capacity} 人，NT$ ${r.fee}${left != null ? `，剩 ${Math.max(left, 0)} 間` : ""}）`,
+                  label: `${r.name}（每間最多 ${r.capacity} 人，每人 NT$ ${r.fee}${left != null ? `，剩 ${Math.max(left, 0)} 間` : ""}）`,
                   disabled: left != null && left <= 0,
                 };
               })}
@@ -1148,7 +1148,7 @@ function CeremonyRegistrationFields({
           extra={
             hasRooms
               ? selectedRoom
-                ? `${selectedRoom.name}費用（整間房）`
+                ? `${selectedRoom.name}每人 NT$ ${selectedRoom.fee} × ${Math.max(participantCount, 1)} 人`
                 : "請先選擇房型"
               : selectedCeremony?.feeMode === CeremonyFeeMode.FIXED_AMOUNT
               ? payerMode === "household"
