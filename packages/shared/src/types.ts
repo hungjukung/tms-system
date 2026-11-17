@@ -592,6 +592,10 @@ export interface RegisterCeremonyRequest {
   noSeatNeeded?: boolean;
   /** 祭改活動：報名的場次，報名時依序給予該場號碼（從 1 號起） */
   session?: CeremonySession;
+  /** 進香：同一位報名者一次選多個座位（多人同行），每個座位各建立一筆報名紀錄 */
+  seatIndexes?: number[];
+  /** 進香多人報名：與 seatIndexes 一一對應的乘客姓名，第一個座位是報名者本人，其餘留空則沿用報名者姓名 */
+  passengerNames?: string[];
 }
 
 /** 供「活動報名」頁一次報名多個活動使用：單筆呼叫立即建立報名紀錄，收據留待與其他活動合併開立 */

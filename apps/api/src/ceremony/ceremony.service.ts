@@ -13,8 +13,12 @@ import {
   LedgerEntryStatus,
   LedgerEntryType,
   MemberHistoryEntryDto,
+  PILGRIMAGE_BUS_ROWS,
+  PILGRIMAGE_BUS_SEAT_COUNT,
+  PILGRIMAGE_BUS_SEATS_PER_ROW,
   ReceiptDto,
   ReceiptSourceType,
+  isPilgrimageBusSeat,
 } from "@tms/shared";
 import { HouseholdService } from "../household/household.service";
 import { LanternService } from "../lantern/lantern.service";
@@ -50,8 +54,10 @@ export class CeremonyService {
     if (isJigai && (!dto.morningCapacity || !dto.afternoonCapacity)) {
       throw new BadRequestException("祭改活動請設定上午場與下午場人數");
     }
+    // 祭改用場次人數、進香用固定的遊覽車座位圖，兩者都不使用桌次座位
+    const usesTables = !isJigai && dto.kind !== CeremonyKind.PILGRIMAGE;
     const ceremony = this.ceremonyRepo.create({
-      kind: isJigai ? CeremonyKind.JIGAI : CeremonyKind.GENERAL,
+      kind: dto.kind ?? CeremonyKind.GENERAL,
       morningCapacity: isJigai ? (dto.morningCapacity ?? null) : null,
       afternoonCapacity: isJigai ? (dto.afternoonCapacity ?? null) : null,
       templeId: dto.templeId,
@@ -60,8 +66,8 @@ export class CeremonyService {
       feeMode: dto.feeMode,
       fixedAmount: dto.fixedAmount != null ? dto.fixedAmount.toFixed(2) : null,
       description: dto.description ?? null,
-      tableCount: isJigai ? null : (dto.tableCount ?? null),
-      seatsPerTable: isJigai ? null : (dto.seatsPerTable ?? null),
+      tableCount: usesTables ? (dto.tableCount ?? null) : null,
+      seatsPerTable: usesTables ? (dto.seatsPerTable ?? null) : null,
       registrationDeadline: dto.registrationDeadline ?? null,
     });
     const saved = await this.ceremonyRepo.save(ceremony);
@@ -117,8 +123,11 @@ export class CeremonyService {
       ceremony.fixedAmount = null;
     }
     if (dto.description !== undefined) ceremony.description = dto.description;
-    if (dto.tableCount !== undefined) ceremony.tableCount = dto.tableCount;
-    if (dto.seatsPerTable !== undefined) ceremony.seatsPerTable = dto.seatsPerTable;
+    // 只有一般活動使用桌次座位；祭改、進香不受桌數設定影響
+    if (ceremony.kind === CeremonyKind.GENERAL) {
+      if (dto.tableCount !== undefined) ceremony.tableCount = dto.tableCount;
+      if (dto.seatsPerTable !== undefined) ceremony.seatsPerTable = dto.seatsPerTable;
+    }
     if (dto.registrationDeadline !== undefined) ceremony.registrationDeadline = dto.registrationDeadline;
 
     const saved = await this.ceremonyRepo.save(ceremony);
@@ -227,9 +236,12 @@ export class CeremonyService {
     if (ceremony.kind === CeremonyKind.JIGAI) {
       return this.createJigaiRegistrationRecord(dto, ceremony, userId);
     }
+    // 進香座位一律由報名者在遊覽車座位圖上自行點選，不自動配位
+    if (ceremony.kind === CeremonyKind.PILGRIMAGE && dto.seatIndex == null) {
+      throw new BadRequestException("請選擇遊覽車座位");
+    }
 
-    const totalSeats =
-      ceremony.tableCount && ceremony.seatsPerTable ? ceremony.tableCount * ceremony.seatsPerTable : null;
+    const totalSeats = this.totalSeatsOf(ceremony);
 
     const buildRegistration = () =>
       this.registrationRepo.create({
@@ -246,13 +258,13 @@ export class CeremonyService {
 
     if (dto.seatIndex != null) {
       // 手動選位：直接以指定座位建立，靠資料庫唯一約束擋下同座位被搶先選走的情況
-      if (!totalSeats || dto.seatIndex < 1 || dto.seatIndex > totalSeats) {
+      if (!totalSeats) throw new BadRequestException("此活動未設定座位");
+      if (!this.isValidSeat(ceremony, dto.seatIndex)) {
         throw new BadRequestException("座位超出範圍");
       }
-      if (!ceremony.seatsPerTable) throw new BadRequestException("此活動未設定座位");
       const registration = buildRegistration();
       registration.seatIndex = dto.seatIndex;
-      registration.seatNumber = this.formatSeatNumber(dto.seatIndex, ceremony.seatsPerTable);
+      registration.seatNumber = this.seatNumberOf(ceremony, dto.seatIndex);
       try {
         saved = await this.registrationRepo.save(registration);
       } catch (err) {
@@ -322,11 +334,120 @@ export class CeremonyService {
     throw new ConflictException("報名人數眾多，取號失敗，請重新送出");
   }
 
+  /** 活動的座位總數：一般活動為桌數 × 每桌人數，進香為遊覽車固定座位數；未設定座位時為 null */
+  private totalSeatsOf(ceremony: Ceremony): number | null {
+    if (ceremony.kind === CeremonyKind.PILGRIMAGE) return PILGRIMAGE_BUS_SEAT_COUNT;
+    if (ceremony.kind === CeremonyKind.JIGAI) return null;
+    return ceremony.tableCount && ceremony.seatsPerTable ? ceremony.tableCount * ceremony.seatsPerTable : null;
+  }
+
+  /** 座位流水號換算「第幾桌／排」時，每桌人數（進香為每排 4 座） */
+  private seatsPerGroupOf(ceremony: Ceremony): number {
+    return ceremony.kind === CeremonyKind.PILGRIMAGE ? PILGRIMAGE_BUS_SEATS_PER_ROW : (ceremony.seatsPerTable ?? 0);
+  }
+
+  private isValidSeat(ceremony: Ceremony, seatIndex: number): boolean {
+    if (ceremony.kind === CeremonyKind.PILGRIMAGE) return isPilgrimageBusSeat(seatIndex);
+    const totalSeats = this.totalSeatsOf(ceremony);
+    return !!totalSeats && Number.isInteger(seatIndex) && seatIndex >= 1 && seatIndex <= totalSeats;
+  }
+
+  /** 存進資料庫的座位號碼：一般活動 "桌-位"，進香 "排-號"（換算方式相同，只是每排固定 4 座） */
+  private seatNumberOf(ceremony: Ceremony, seatIndex: number): string {
+    return this.formatSeatNumber(seatIndex, this.seatsPerGroupOf(ceremony));
+  }
+
+  /** 不帶「座位：」前綴的座位文字：一般活動「1桌8號」，進香「3排2號」 */
+  private seatOnlyLabel(ceremony: Ceremony, seatIndex: number): string {
+    const [group, seat] = this.seatNumberOf(ceremony, seatIndex).split("-");
+    return ceremony.kind === CeremonyKind.PILGRIMAGE ? `${group}排${seat}號` : `${group}桌${seat}號`;
+  }
+
+  /**
+   * 進香多人報名：同一位報名者一次在遊覽車座位圖上選好幾個座位，每個座位各建立一筆報名紀錄。
+   * 第一個座位是報名者本人並掛上全部金額，其餘座位是同行乘客（姓名可另外填，未填就沿用報名者姓名）、金額為 0，
+   * 不會重複計入財務報表或報名者的參與歷史。全部座位包在同一個交易內，任一座位被搶先選走就整批回滾。
+   */
+  private async createMultiSeatRegistrationForCombined(
+    dto: RegisterCeremonyDto,
+    userId: string,
+  ): Promise<{
+    registrations: CeremonyRegistrationDto[];
+    payerName: string;
+    description: string;
+    note: string;
+    templeId: string;
+  }> {
+    const ceremony = await this.ceremonyRepo.findOne({ where: { id: dto.ceremonyId } });
+    if (!ceremony) throw new NotFoundException("找不到活動");
+    const seatIndexes = dto.seatIndexes ?? [];
+    if (seatIndexes.length === 0) throw new BadRequestException("請選擇座位");
+    if (new Set(seatIndexes).size !== seatIndexes.length) throw new BadRequestException("座位重複，請重新選擇");
+    if (!this.totalSeatsOf(ceremony)) throw new BadRequestException("此活動未設定座位");
+    for (const seatIndex of seatIndexes) {
+      if (!this.isValidSeat(ceremony, seatIndex)) throw new BadRequestException("座位超出範圍");
+    }
+    if (dto.memberId) {
+      await this.householdService.findMemberById(dto.memberId);
+    }
+    const payerName = dto.memberId
+      ? ((await this.householdService.findMemberByIdOrNull(dto.memberId))?.name ?? "")
+      : (dto.walkInName ?? "");
+    const passengerNames = seatIndexes.map((_, i) =>
+      i === 0 ? payerName : dto.passengerNames?.[i]?.trim() || payerName,
+    );
+
+    let saved: CeremonyRegistration[];
+    try {
+      saved = await this.registrationRepo.manager.transaction(async (manager) => {
+        const rows: CeremonyRegistration[] = [];
+        for (let i = 0; i < seatIndexes.length; i++) {
+          const isMain = i === 0;
+          rows.push(
+            await manager.save(
+              manager.create(CeremonyRegistration, {
+                ceremonyId: dto.ceremonyId,
+                memberId: isMain ? (dto.memberId ?? null) : null,
+                walkInName: isMain ? (dto.walkInName ?? null) : passengerNames[i] || null,
+                walkInAddress: isMain ? (dto.walkInAddress ?? null) : null,
+                amount: isMain ? dto.amount.toFixed(2) : "0.00",
+                wishText: isMain ? (dto.wishText ?? null) : null,
+                seatIndex: seatIndexes[i],
+                seatNumber: this.seatNumberOf(ceremony, seatIndexes[i]),
+                createdByUserId: userId,
+              }),
+            ),
+          );
+        }
+        return rows;
+      });
+    } catch (err) {
+      if (err instanceof QueryFailedError && (err as any).code === PG_UNIQUE_VIOLATION) {
+        throw new ConflictException("其中有座位已被選走，請重新選擇");
+      }
+      throw err;
+    }
+
+    const registrations = await Promise.all(saved.map((r) => this.toRegistrationDto(r, ceremony)));
+    const headcount = seatIndexes.length;
+    return {
+      registrations,
+      payerName,
+      description: headcount > 1 ? `${ceremony.name}*${headcount}人` : ceremony.name,
+      note:
+        headcount > 1
+          ? `座位｜${seatIndexes.map((s, i) => `${this.seatOnlyLabel(ceremony, s)} ${passengerNames[i]}`.trim()).join("、")}`
+          : `座位：${this.seatOnlyLabel(ceremony, seatIndexes[0])}`,
+      templeId: ceremony.templeId,
+    };
+  }
+
   /** 供選位彈出視窗使用：算出指定活動每個座位目前的狀態（哪桌哪位、是否已被選走、參加者姓名） */
   async getSeatMap(ceremonyId: string): Promise<CeremonySeatDto[]> {
     const ceremony = await this.ceremonyRepo.findOne({ where: { id: ceremonyId } });
     if (!ceremony) throw new NotFoundException("找不到活動");
-    if (!ceremony.tableCount || !ceremony.seatsPerTable) return [];
+    const isPilgrimage = ceremony.kind === CeremonyKind.PILGRIMAGE;
+    if (!isPilgrimage && (!ceremony.tableCount || !ceremony.seatsPerTable)) return [];
 
     const allRegistrations = await this.registrationRepo.find({ where: { ceremonyId } });
     // 排除收據已作廢的報名紀錄，不讓已取消的報名繼續佔用座位（跟「報名名單」的排除邏輯一致）
@@ -342,11 +463,16 @@ export class CeremonyService {
     const memberIds = registrations.map((r) => r.memberId).filter((id): id is string => !!id);
     const memberById = await this.householdService.findMembersByIds([...new Set(memberIds)]);
 
-    const totalSeats = ceremony.tableCount * ceremony.seatsPerTable;
+    // 進香：tableNumber 代表第幾排、seatInTable 代表該排由左到右第幾號，門的位置沒有座位，直接略過
+    const seatsPerGroup = this.seatsPerGroupOf(ceremony);
+    const maxSeatIndex = isPilgrimage
+      ? PILGRIMAGE_BUS_ROWS * PILGRIMAGE_BUS_SEATS_PER_ROW
+      : (ceremony.tableCount as number) * seatsPerGroup;
     const seats: CeremonySeatDto[] = [];
-    for (let seatIndex = 1; seatIndex <= totalSeats; seatIndex++) {
-      const tableNumber = Math.floor((seatIndex - 1) / ceremony.seatsPerTable) + 1;
-      const seatInTable = ((seatIndex - 1) % ceremony.seatsPerTable) + 1;
+    for (let seatIndex = 1; seatIndex <= maxSeatIndex; seatIndex++) {
+      if (isPilgrimage && !isPilgrimageBusSeat(seatIndex)) continue;
+      const tableNumber = Math.floor((seatIndex - 1) / seatsPerGroup) + 1;
+      const seatInTable = ((seatIndex - 1) % seatsPerGroup) + 1;
       const registration = registrationBySeat.get(seatIndex);
       const participantName = registration
         ? registration.memberId
@@ -406,6 +532,9 @@ export class CeremonyService {
     if (dto.householdId) {
       return this.createHouseholdRegistrationForCombined(dto, userId);
     }
+    if (dto.seatIndexes?.length) {
+      return this.createMultiSeatRegistrationForCombined(dto, userId);
+    }
     if (dto.tableNumber != null) {
       return this.createTableRegistrationForCombined(dto, userId);
     }
@@ -447,17 +576,18 @@ export class CeremonyService {
     }
 
     const seatIndexes = dto.householdSeatIndexes;
+    if (!seatIndexes && ceremony.kind === CeremonyKind.PILGRIMAGE) {
+      throw new BadRequestException("請選擇遊覽車座位");
+    }
     if (seatIndexes) {
       if (seatIndexes.length !== headcount) {
         throw new BadRequestException("選位數量與戶籍人數不符，請重新選位");
       }
-      const totalSeats =
-        ceremony.tableCount && ceremony.seatsPerTable ? ceremony.tableCount * ceremony.seatsPerTable : null;
-      if (!totalSeats || !ceremony.seatsPerTable) {
+      if (!this.totalSeatsOf(ceremony)) {
         throw new BadRequestException("此活動未設定座位");
       }
       for (const seatIndex of seatIndexes) {
-        if (seatIndex < 1 || seatIndex > totalSeats) {
+        if (!this.isValidSeat(ceremony, seatIndex)) {
           throw new BadRequestException("座位超出範圍");
         }
       }
@@ -479,7 +609,7 @@ export class CeremonyService {
           });
           if (seatIndexes) {
             registration.seatIndex = seatIndexes[i];
-            registration.seatNumber = this.formatSeatNumber(seatIndexes[i], ceremony.seatsPerTable as number);
+            registration.seatNumber = this.seatNumberOf(ceremony, seatIndexes[i]);
           }
           rows.push(await manager.save(registration));
         }
@@ -496,7 +626,7 @@ export class CeremonyService {
     const payerName = members.map((m) => m.name).join("、");
     const description = `${ceremony.name}*${headcount}人`;
     const note = seatIndexes
-      ? `座位｜${seatIndexes.map((seatIndex) => this.formatSeatOnly(seatIndex, ceremony.seatsPerTable as number)).join("、")}`
+      ? `座位｜${seatIndexes.map((seatIndex) => this.seatOnlyLabel(ceremony, seatIndex)).join("、")}`
       : undefined;
 
     return { registrations, payerName, description, note, templeId: ceremony.templeId };
@@ -580,7 +710,7 @@ export class CeremonyService {
   }> {
     const ceremony = await this.ceremonyRepo.findOne({ where: { id: dto.ceremonyId } });
     if (!ceremony) throw new NotFoundException("找不到活動");
-    if (ceremony.kind === CeremonyKind.JIGAI || !ceremony.tableCount || !ceremony.seatsPerTable) {
+    if (ceremony.kind !== CeremonyKind.GENERAL || !ceremony.tableCount || !ceremony.seatsPerTable) {
       throw new BadRequestException("此活動未設定座位");
     }
     const tableNumber = dto.tableNumber as number;
@@ -685,17 +815,10 @@ export class CeremonyService {
     return null;
   }
 
-  /** 座位號碼內部存成 "桌-位"（例如 "1-8"），收據上要印成更好讀的「座位：1桌8號」 */
-  private formatSeatLabel(seatNumber: string): string {
-    const [table, seat] = seatNumber.split("-");
-    return `座位：${table}桌${seat}號`;
-  }
-
-  /** 同 formatSeatLabel，但不帶「座位：」前綴，供整戶報名逐人列出座位時使用（前綴只需出現一次） */
-  private formatSeatOnly(seatIndex: number, seatsPerTable: number): string {
-    const table = Math.floor((seatIndex - 1) / seatsPerTable) + 1;
-    const seat = ((seatIndex - 1) % seatsPerTable) + 1;
-    return `${table}桌${seat}號`;
+  /** 座位號碼內部存成 "桌-位"（例如 "1-8"），收據上要印成更好讀的「座位：1桌8號」；進香印成「座位：3排2號」 */
+  private formatSeatLabel(seatNumber: string, kind?: CeremonyKind): string {
+    const [group, seat] = seatNumber.split("-");
+    return kind === CeremonyKind.PILGRIMAGE ? `座位：${group}排${seat}號` : `座位：${group}桌${seat}號`;
   }
 
   /** 供 PrintModule 組合收據內容使用：品項只印活動名稱，座位號碼另外以 note 附註 */
@@ -712,7 +835,7 @@ export class CeremonyService {
       note: registration.queueNumber
         ? this.formatQueueLabel(registration.session, registration.queueNumber)
         : registration.seatNumber
-          ? this.formatSeatLabel(registration.seatNumber)
+          ? this.formatSeatLabel(registration.seatNumber, ceremony?.kind)
           : undefined,
     };
   }
@@ -825,8 +948,7 @@ export class CeremonyService {
       description: ceremony.description,
       tableCount: ceremony.tableCount,
       seatsPerTable: ceremony.seatsPerTable,
-      totalSeats:
-        ceremony.tableCount && ceremony.seatsPerTable ? ceremony.tableCount * ceremony.seatsPerTable : null,
+      totalSeats: this.totalSeatsOf(ceremony),
       seatsAssigned: stats?.seatsAssigned ?? 0,
       kind: ceremony.kind ?? CeremonyKind.GENERAL,
       morningCapacity: ceremony.morningCapacity ?? null,

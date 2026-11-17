@@ -27,6 +27,11 @@ import {
   CeremonyDto,
   CeremonyFeeMode,
   CeremonyKind,
+  CeremonyRegistrationDto,
+  CeremonySession,
+  PILGRIMAGE_BUS_ROWS,
+  PILGRIMAGE_BUS_SEAT_COUNT,
+  PILGRIMAGE_BUS_SEATS_PER_ROW,
   GenerateLanternSlotsRequest,
   LANTERN_TYPE_OPTIONS,
   LanternSlotDto,
@@ -55,16 +60,18 @@ import {
 } from "../api/lantern";
 import { openPrintWindow } from "../api/client";
 import { MemberSelect } from "../components/MemberSelect";
+import { BusSeatMap } from "../components/BusSeatMap";
 import { useAuth } from "../context/AuthContext";
 import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportRowsToExcel } from "../utils/export";
 import { joinLanternType, splitLanternType } from "../utils/lanternType";
 
-type ActivityType = "ceremony" | "jigai" | "lanternWall";
+type ActivityType = "ceremony" | "jigai" | "pilgrimage" | "lanternWall";
 
 const activityTypeOptions: { label: string; value: ActivityType }[] = [
   { label: "活動", value: "ceremony" },
   { label: "祭改", value: "jigai" },
+  { label: "進香", value: "pilgrimage" },
   { label: "點燈牆", value: "lanternWall" },
 ];
 
@@ -73,8 +80,23 @@ const feeModeLabel: Record<CeremonyFeeMode, string> = {
   [CeremonyFeeMode.FIXED_AMOUNT]: "固定金額",
 };
 
+/** 報名名單上的座位欄：祭改顯示「上午場 3號」，進香顯示「3排2號」，一般活動維持原本的「桌-位」 */
+function registrationSeatText(r: CeremonyRegistrationDto, kind: CeremonyKind): string {
+  if (r.queueNumber != null) {
+    return `${r.session === CeremonySession.AM ? "上午場" : r.session === CeremonySession.PM ? "下午場" : ""} ${r.queueNumber}號`.trim();
+  }
+  if (!r.seatNumber) return "-";
+  if (kind === CeremonyKind.PILGRIMAGE) {
+    const [row, seat] = r.seatNumber.split("-");
+    return `${row}排${seat}號`;
+  }
+  return r.seatNumber;
+}
+
 function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeId: string; kind?: CeremonyKind }) {
   const isJigai = kind === CeremonyKind.JIGAI;
+  const isPilgrimage = kind === CeremonyKind.PILGRIMAGE;
+  const usesTables = kind === CeremonyKind.GENERAL;
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const feeMode = Form.useWatch("feeMode", form) ?? CeremonyFeeMode.FREE_WILL;
@@ -90,7 +112,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
   });
 
   return (
-    <Card title={isJigai ? "新增祭改活動" : "新增活動"}>
+    <Card title={isJigai ? "新增祭改活動" : isPilgrimage ? "新增進香活動" : "新增活動"}>
       <Form
         form={form}
         layout="vertical"
@@ -103,8 +125,8 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
             feeMode: values.feeMode,
             fixedAmount: values.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? values.fixedAmount : undefined,
             description: values.description,
-            tableCount: isJigai ? undefined : values.tableCount || undefined,
-            seatsPerTable: isJigai ? undefined : values.seatsPerTable || undefined,
+            tableCount: usesTables ? values.tableCount || undefined : undefined,
+            seatsPerTable: usesTables ? values.seatsPerTable || undefined : undefined,
             kind,
             morningCapacity: isJigai ? values.morningCapacity : undefined,
             afternoonCapacity: isJigai ? values.afternoonCapacity : undefined,
@@ -156,6 +178,12 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
               message="報名時選擇上午場或下午場，各場依序給予號碼（從 1 號起），額滿後該場無法再報名，號碼會印在收據上"
             />
           </>
+        ) : isPilgrimage ? (
+          <Alert
+            type="info"
+            style={{ marginBottom: 16 }}
+            message={`報名時在遊覽車座位圖上點選座位（共 ${PILGRIMAGE_BUS_SEAT_COUNT} 座），可一次為多人選位，已被選走的座位會變色`}
+          />
         ) : (
           <Space.Compact block>
             <Form.Item label="桌數（選填，設定後報名會自動配位）" name="tableCount" style={{ width: "50%" }}>
@@ -166,7 +194,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
             </Form.Item>
           </Space.Compact>
         )}
-        {!isJigai && tableCount > 0 && seatsPerTable > 0 && (
+        {usesTables && tableCount > 0 && seatsPerTable > 0 && (
           <Alert
             type="info"
             style={{ marginBottom: 16 }}
@@ -188,6 +216,7 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
   const feeMode = Form.useWatch("feeMode", form) ?? ceremony.feeMode;
   const hasRegistrations = ceremony.registrationCount > 0;
   const isJigai = ceremony.kind === CeremonyKind.JIGAI;
+  const usesTables = ceremony.kind === CeremonyKind.GENERAL;
 
   const mutation = useMutation({
     mutationFn: (values: Parameters<typeof updateCeremony>[1]) => updateCeremony(ceremony.id, values),
@@ -227,7 +256,9 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
             description: values.description || null,
             ...(isJigai
               ? { morningCapacity: values.morningCapacity, afternoonCapacity: values.afternoonCapacity }
-              : { tableCount: values.tableCount || null, seatsPerTable: values.seatsPerTable || null }),
+              : usesTables
+                ? { tableCount: values.tableCount || null, seatsPerTable: values.seatsPerTable || null }
+                : {}),
             registrationDeadline: values.registrationDeadline
               ? (values.registrationDeadline as Dayjs).format("YYYY-MM-DD")
               : null,
@@ -269,7 +300,7 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
               <InputNumber style={{ width: "100%" }} min={ceremony.afternoonRegistered || 1} />
             </Form.Item>
           </Space.Compact>
-        ) : (
+        ) : !usesTables ? null : (
           <Space.Compact block>
             <Form.Item label="桌數（可增加，不可低於目前已配發的座位）" name="tableCount" style={{ width: "50%" }}>
               <InputNumber style={{ width: "100%" }} min={1} placeholder="例如：10" />
@@ -279,7 +310,7 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
             </Form.Item>
           </Space.Compact>
         )}
-        {!isJigai && hasRegistrations && (
+        {usesTables && hasRegistrations && (
           <Alert
             type="warning"
             style={{ marginBottom: 16 }}
@@ -399,7 +430,10 @@ function CeremonyListCard({ templeId }: { templeId: string }) {
                 </Space>
               ) : record.totalSeats ? (
                 <Tag color={record.seatsAssigned >= record.totalSeats ? "red" : "green"}>
-                  {record.seatsAssigned}/{record.totalSeats}（{record.tableCount} 桌 × {record.seatsPerTable} 人）
+                  {record.seatsAssigned}/{record.totalSeats}
+                  {record.kind === CeremonyKind.PILGRIMAGE
+                    ? "（遊覽車）"
+                    : `（${record.tableCount} 桌 × ${record.seatsPerTable} 人）`}
                 </Tag>
               ) : (
                 <Typography.Text type="secondary">未設定</Typography.Text>
@@ -534,13 +568,30 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
       registrations.map((r) => [
         r.participantName || "（未留姓名）",
         r.amount,
-        r.seatNumber ?? "",
+        registrationSeatText(r, ceremony.kind),
         dayjs(r.createdAt).format("YYYY-MM-DD HH:mm"),
       ]),
     );
   };
 
+  const isPilgrimage = ceremony.kind === CeremonyKind.PILGRIMAGE;
+
   const handleExportSeatChart = () => {
+    if (isPilgrimage) {
+      // 遊覽車座位表：每排一列，由左到右 1～4 號，門的位置沒有座位
+      const rows: (string | number)[][] = Array.from({ length: PILGRIMAGE_BUS_ROWS }, (_, r) => {
+        const row = r + 1;
+        return [
+          `第${row}排`,
+          ...Array.from({ length: PILGRIMAGE_BUS_SEATS_PER_ROW }, (_, c) => {
+            const seat = seats.find((s) => s.tableNumber === row && s.seatInTable === c + 1);
+            return seat ? seat.participantName || "" : "（門）";
+          }),
+        ];
+      });
+      exportRowsToExcel(`座位表_${ceremony.name}.xlsx`, "座位表", ["排", "1號", "2號", "3號", "4號"], rows);
+      return;
+    }
     if (!ceremony.tableCount || !ceremony.seatsPerTable) return;
     const headers = ["桌次", ...Array.from({ length: ceremony.seatsPerTable }, (_, i) => `${i + 1}號`)];
     const rows: (string | number)[][] = Array.from({ length: ceremony.tableCount }, (_, t) => {
@@ -590,7 +641,8 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
           )}
           {ceremony.totalSeats != null && (
             <Descriptions.Item label="座位" span={2}>
-              {ceremony.seatsAssigned} / {ceremony.totalSeats}（{ceremony.tableCount} 桌 × {ceremony.seatsPerTable} 人）
+              {ceremony.seatsAssigned} / {ceremony.totalSeats}
+              {isPilgrimage ? "（遊覽車）" : `（${ceremony.tableCount} 桌 × ${ceremony.seatsPerTable} 人）`}
             </Descriptions.Item>
           )}
         </Descriptions>
@@ -613,6 +665,9 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
               </Button>
             }
           >
+            {isPilgrimage ? (
+              <BusSeatMap seats={seats} />
+            ) : (
             <Space direction="vertical" style={{ width: "100%" }} size="middle">
               {Array.from(new Set(seats.map((s) => s.tableNumber))).map((tableNumber) => (
                 <div key={tableNumber}>
@@ -638,6 +693,7 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
                 </div>
               ))}
             </Space>
+            )}
           </Card>
         )}
 
@@ -659,7 +715,10 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
             columns={[
               { title: "參加者", dataIndex: "participantName", render: (v: string) => v || "（未留姓名）" },
               { title: "金額", dataIndex: "amount", render: (v: number) => `NT$ ${v.toLocaleString()}` },
-              { title: "座位", dataIndex: "seatNumber", render: (v: string | null) => v ?? "-" },
+              {
+                title: ceremony.kind === CeremonyKind.JIGAI ? "場次號碼" : "座位",
+                render: (_: unknown, r: CeremonyRegistrationDto) => registrationSeatText(r, ceremony.kind),
+              },
               {
                 title: "報名時間",
                 dataIndex: "createdAt",
@@ -1491,6 +1550,12 @@ export function CreateActivityPage() {
           {activityType === "jigai" && (
             <>
               <CreateCeremonyForm templeId={templeId} kind={CeremonyKind.JIGAI} />
+              <CeremonyListCard templeId={templeId} />
+            </>
+          )}
+          {activityType === "pilgrimage" && (
+            <>
+              <CreateCeremonyForm templeId={templeId} kind={CeremonyKind.PILGRIMAGE} />
               <CeremonyListCard templeId={templeId} />
             </>
           )}

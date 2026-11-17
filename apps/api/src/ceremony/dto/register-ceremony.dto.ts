@@ -54,4 +54,16 @@ export class RegisterCeremonyDto {
   @IsOptional()
   @IsEnum(CeremonySession)
   session?: CeremonySession;
+
+  /** 進香多人報名：一次選多個座位 */
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  seatIndexes?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  passengerNames?: string[];
 }

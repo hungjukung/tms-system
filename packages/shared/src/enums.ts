@@ -83,7 +83,31 @@ export enum CeremonyFeeMode {
 export enum CeremonyKind {
   GENERAL = "GENERAL",
   JIGAI = "JIGAI",
+  PILGRIMAGE = "PILGRIMAGE", // 進香：依遊覽車座位圖點選座位
 }
+
+/**
+ * 進香遊覽車座位配置：共 12 排，每排左右各 2 個座位，由左到右編 1～4 號（1、2 在走道左側，3、4 在右側）；
+ * 右側第 1～2 排是前門、第 7～8 排是後門，沒有座位，全車共 40 座。
+ * 座位流水號 seatIndex = (排 - 1) × 4 + 號。
+ */
+export const PILGRIMAGE_BUS_ROWS = 12;
+export const PILGRIMAGE_BUS_SEATS_PER_ROW = 4;
+export const PILGRIMAGE_BUS_DOOR_ROWS: Record<number, string> = { 1: "前門", 2: "前門", 7: "後門", 8: "後門" };
+
+export function isPilgrimageBusSeat(seatIndex: number): boolean {
+  if (!Number.isInteger(seatIndex) || seatIndex < 1 || seatIndex > PILGRIMAGE_BUS_ROWS * PILGRIMAGE_BUS_SEATS_PER_ROW) {
+    return false;
+  }
+  const row = Math.floor((seatIndex - 1) / PILGRIMAGE_BUS_SEATS_PER_ROW) + 1;
+  const col = ((seatIndex - 1) % PILGRIMAGE_BUS_SEATS_PER_ROW) + 1;
+  return col <= 2 || !PILGRIMAGE_BUS_DOOR_ROWS[row];
+}
+
+export const PILGRIMAGE_BUS_SEAT_COUNT = Array.from(
+  { length: PILGRIMAGE_BUS_ROWS * PILGRIMAGE_BUS_SEATS_PER_ROW },
+  (_, i) => i + 1,
+).filter(isPilgrimageBusSeat).length;
 
 /** 祭改場次 */
 export enum CeremonySession {
