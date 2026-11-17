@@ -10,6 +10,7 @@ import { CreateLedgerEntryDto } from "./dto/create-ledger-entry.dto";
 import { ReviewLedgerEntryDto } from "./dto/review-ledger-entry.dto";
 import { BatchApproveLedgerEntriesDto } from "./dto/batch-approve-ledger-entries.dto";
 import { ConfirmAuditDto } from "./dto/confirm-audit.dto";
+import { requireDateParam, requireIntParam } from "../common/query-utils";
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller("finance")
@@ -55,7 +56,11 @@ export class FinanceController {
     @Query("to") to: string,
     @Query("templeId") templeId: string,
   ) {
-    return this.financeService.getAuditCalendar(from, to, templeId);
+    return this.financeService.getAuditCalendar(
+      requireDateParam(from, "起始日期"),
+      requireDateParam(to, "結束日期"),
+      templeId,
+    );
   }
 
   /** 「審核日誌」確認頁按下「入帳」：把選定日期標記為已審核（含當天所有收據收入 + 手動流水帳項目） */
@@ -85,7 +90,7 @@ export class FinanceController {
   @Get("reports/daily")
   @Roles(UserRole.FINANCE, UserRole.DIRECTOR, UserRole.REGISTRAR)
   getDailyReport(@Query("date") date: string, @Query("templeId") templeId?: string) {
-    return this.financeService.getDailyReport(date, templeId);
+    return this.financeService.getDailyReport(requireDateParam(date, "日期"), templeId);
   }
 
   @Get("reports/monthly")
@@ -95,7 +100,11 @@ export class FinanceController {
     @Query("month") month: string,
     @Query("templeId") templeId?: string,
   ) {
-    return this.financeService.getMonthlyReport(Number(year), Number(month), templeId);
+    return this.financeService.getMonthlyReport(
+      requireIntParam(year, "年份", 1900, 9999),
+      requireIntParam(month, "月份", 1, 12),
+      templeId,
+    );
   }
 
   @Get("reports/range")
@@ -105,12 +114,16 @@ export class FinanceController {
     @Query("end") end: string,
     @Query("templeId") templeId?: string,
   ) {
-    return this.financeService.getRangeReport(start, end, templeId);
+    return this.financeService.getRangeReport(
+      requireDateParam(start, "起始日期"),
+      requireDateParam(end, "結束日期"),
+      templeId,
+    );
   }
 
   @Get("reports/annual")
   @Roles(UserRole.FINANCE, UserRole.DIRECTOR)
   getAnnualReport(@Query("year") year: string, @Query("templeId") templeId?: string) {
-    return this.financeService.getAnnualReport(Number(year), templeId);
+    return this.financeService.getAnnualReport(requireIntParam(year, "年份", 1900, 9999), templeId);
   }
 }

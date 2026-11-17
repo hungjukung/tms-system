@@ -160,8 +160,8 @@ function DonationFields({ form, ceremonies }: { form: any; ceremonies: CeremonyD
             <MemberSelect />
           </Form.Item>
         ) : (
-          <Form.Item label="姓名" name="walkInName">
-            <Input placeholder="可留空（不留名）" />
+          <Form.Item label="姓名" name="walkInName" rules={[{ required: true, whitespace: true, message: "請輸入姓名" }]}>
+            <Input placeholder="請輸入姓名" />
           </Form.Item>
         )}
         <Form.Item
@@ -227,8 +227,8 @@ function GiftFields({ form }: { form: any }) {
             <MemberSelect />
           </Form.Item>
         ) : (
-          <Form.Item label="姓名" name="walkInName">
-            <Input placeholder="可留空（不留名）" />
+          <Form.Item label="姓名" name="walkInName" rules={[{ required: true, whitespace: true, message: "請輸入姓名" }]}>
+            <Input placeholder="請輸入姓名" />
           </Form.Item>
         )}
         <Form.Item

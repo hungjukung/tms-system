@@ -5,3 +5,6 @@ build/
 *.log
 .DS_Store
 uploads/
+coverage/
+e2e-report/
+e2e-results/

@@ -1,5 +1,7 @@
 import { Module } from "@nestjs/common";
+import { APP_FILTER } from "@nestjs/core";
 import { ConfigModule, ConfigService } from "@nestjs/config";
+import { DatabaseExceptionFilter } from "./common/database-exception.filter";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { AuthModule } from "./auth/auth.module";
 import { HouseholdModule } from "./household/household.module";
@@ -77,5 +79,6 @@ import { Temple } from "./settings/entities/temple.entity";
     ActivitiesModule,
     GiftModule,
   ],
+  providers: [{ provide: APP_FILTER, useClass: DatabaseExceptionFilter }],
 })
 export class AppModule {}

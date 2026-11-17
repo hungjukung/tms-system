@@ -2,7 +2,12 @@ packages:
   - "apps/*"
   - "packages/*"
 allowBuilds:
+  '@embedded-postgres/linux-x64': true
+  '@embedded-postgres/windows-x64': true
   '@nestjs/core': true
   bcrypt: true
   core-js: true
   esbuild: true
+overrides:
+  # 測試用的 embedded-postgres 沿用專案既有的 pg 版本，不另外拉一份更新的
+  'embedded-postgres>pg': 8.22.0

@@ -1,0 +1,566 @@
+import { INestApplication } from "@nestjs/common";
+import { CeremonyFeeMode, DonationType, GiftType, UserRole } from "@tms/shared";
+import { api, BaseFixture, createMember, createTestApp, resetDatabase, seedBaseFixture } from "../support/app";
+
+const GHOST_ID = "00000000-0000-4000-8000-000000000000";
+
+/**
+ * 黑箱測試：點燈牆、捐款、送禮、合併開立收據、收據作廢／刪除／列印。
+ */
+describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
+  let app: INestApplication;
+  let fx: BaseFixture;
+  let director: ReturnType<typeof api>;
+  let finance: ReturnType<typeof api>;
+  let volunteer: ReturnType<typeof api>;
+
+  beforeAll(async () => {
+    app = await createTestApp();
+  });
+  beforeEach(async () => {
+    await resetDatabase(app);
+    fx = await seedBaseFixture(app);
+    director = api(app, fx.tokens[UserRole.DIRECTOR]);
+    finance = api(app, fx.tokens[UserRole.FINANCE]);
+    volunteer = api(app, fx.tokens[UserRole.VOLUNTEER]);
+  });
+  afterAll(async () => {
+    await app.close();
+  });
+
+  /** 建一面燈牆，並在同一排產生 count 個燈位（代碼 A-01、A-02…），回傳燈牆與燈位 */
+  const createWallWithSlots = async (count = 3, name = "右牆") => {
+    const wall = (
+      await director
+        .post("/lantern/walls", { templeId: fx.templeId, name, year: new Date().getFullYear(), slotPrice: 600 })
+        .expect(201)
+    ).body;
+    await director
+      .post(`/lantern/walls/${wall.id}/slots`, {
+        prefix: "A",
+        positions: Array.from({ length: count }, (_, i) => ({ row: 1, column: i + 1, gridRow: 1, gridColumn: i + 1 })),
+      })
+      .expect(201);
+    const slots = (await volunteer.get(`/lantern/walls/${wall.id}/slots`).expect(200)).body as {
+      id: string;
+      code: string;
+      status: string;
+      claim?: { id: string; memberName: string };
+    }[];
+    return { wall, slots };
+  };
+
+  const slotsOf = async (wallId: string) =>
+    (await volunteer.get(`/lantern/walls/${wallId}/slots`).expect(200)).body as {
+      id: string;
+      code: string;
+      status: string;
+      claim?: { id: string; memberName: string; lanternType: string | null };
+    }[];
+
+  // ───────────────────────────── 燈牆與燈位 ─────────────────────────────
+  describe("燈牆與燈位", () => {
+    it("建立燈牆、產生燈位：單排用 A-01 命名，燈位一開始都是空的", async () => {
+      const { wall, slots } = await createWallWithSlots(3);
+      expect(wall).toMatchObject({ name: "右牆", slotPrice: 600, slotCount: 0, claimedCount: 0, isTaisuiWall: false });
+      expect(slots.map((s) => s.code)).toEqual(["A-01", "A-02", "A-03"]);
+      expect(slots.every((s) => s.status === "EMPTY")).toBe(true);
+    });
+
+    it("跨多排時用「前綴＋排號-格號」命名（B1-01、B2-01）", async () => {
+      const { wall } = await createWallWithSlots(1);
+      await director
+        .post(`/lantern/walls/${wall.id}/slots`, {
+          prefix: "B",
+          positions: [
+            { row: 1, column: 1, gridRow: 2, gridColumn: 1 },
+            { row: 2, column: 1, gridRow: 3, gridColumn: 1 },
+          ],
+        })
+        .expect(201);
+      expect((await slotsOf(wall.id)).map((s) => s.code)).toEqual(["A-01", "B1-01", "B2-01"]);
+    });
+
+    it("燈位代碼重複：409", async () => {
+      const { wall } = await createWallWithSlots(2);
+      const res = await director
+        .post(`/lantern/walls/${wall.id}/slots`, { prefix: "A", positions: [{ row: 1, column: 1, gridRow: 5, gridColumn: 5 }] })
+        .expect(409);
+      expect(res.body.message).toContain("燈位代碼重複");
+    });
+
+    it.each([
+      ["年份早於 2000（邊界 1999）", { year: 1999 }],
+      ["單價為 0（必須大於 0）", { slotPrice: 0 }],
+      ["缺少名稱", { name: undefined }],
+    ])("建立燈牆輸入驗證：%s → 400", async (_label, overrides) => {
+      await director
+        .post("/lantern/walls", { templeId: fx.templeId, name: "牆", year: 2026, slotPrice: 600, ...overrides })
+        .expect(400);
+    });
+
+    it("邊界值：年份 2000 可以建立；沒有選任何燈位位置不能產生燈位", async () => {
+      const wall = (
+        await director.post("/lantern/walls", { templeId: fx.templeId, name: "牆", year: 2000, slotPrice: 1 }).expect(201)
+      ).body;
+      await director.post(`/lantern/walls/${wall.id}/slots`, { prefix: "A", positions: [] }).expect(400);
+    });
+
+    it("志工不能建立燈牆或產生燈位：403", async () => {
+      const { wall } = await createWallWithSlots(1);
+      await volunteer.post("/lantern/walls", { templeId: fx.templeId, name: "牆", year: 2026, slotPrice: 1 }).expect(403);
+      await volunteer
+        .post(`/lantern/walls/${wall.id}/slots`, { prefix: "Z", positions: [{ row: 1, column: 1, gridRow: 9, gridColumn: 9 }] })
+        .expect(403);
+    });
+
+    it("燈牆列表統計燈位數、已點燈數與金額", async () => {
+      const { wall, slots } = await createWallWithSlots(3);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
+      await volunteer.post("/lantern/claims", { slotId: slots[1].id, walkInName: "乙", amount: 800 }).expect(201);
+      const [listed] = (await volunteer.get(`/lantern/walls?templeId=${fx.templeId}`).expect(200)).body;
+      expect(listed).toMatchObject({ id: wall.id, slotCount: 3, claimedCount: 2, totalAmount: 1400 });
+    });
+
+    it("刪除燈牆：已有人點燈先 409，force 才刪", async () => {
+      const { wall, slots } = await createWallWithSlots(2);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
+      const blocked = await director.delete(`/lantern/walls/${wall.id}`).expect(409);
+      expect(blocked.body.claimedCount).toBe(1);
+      await director.delete(`/lantern/walls/${wall.id}?force=true`).expect(200);
+      expect((await volunteer.get("/lantern/walls").expect(200)).body).toEqual([]);
+    });
+
+    it("改燈牆名稱；不存在的燈牆 404", async () => {
+      const { wall } = await createWallWithSlots(1);
+      const res = await director.patch(`/lantern/walls/${wall.id}`, { name: "平安燈牆", isTaisuiWall: true }).expect(200);
+      expect(res.body).toMatchObject({ name: "平安燈牆", isTaisuiWall: true });
+      await director.patch(`/lantern/walls/${GHOST_ID}`, { name: "x" }).expect(404);
+      await volunteer.get(`/lantern/walls/${GHOST_ID}/slots`).expect(404);
+    });
+  });
+
+  // ───────────────────────────── 點燈 ─────────────────────────────
+  describe("點燈認領", () => {
+    it("認領燈位：燈位變成已認領，同時開立收據", async () => {
+      const { wall, slots } = await createWallWithSlots(2);
+      const member = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "龔忠欣");
+      const res = await volunteer
+        .post("/lantern/claims", { slotId: slots[0].id, memberId: member.id, amount: 600, lanternType: "光明燈" })
+        .expect(201);
+      expect(res.body.slot).toMatchObject({ code: "A-01", status: "CLAIMED" });
+      expect(res.body.slot.claim).toMatchObject({ memberName: "龔忠欣", amount: 600, lanternType: "光明燈" });
+      expect(res.body.receipt).toMatchObject({ amount: 600, status: "ISSUED", sourceType: "LANTERN_CLAIM" });
+
+      const after = await slotsOf(wall.id);
+      expect(after.map((s) => s.status)).toEqual(["CLAIMED", "EMPTY"]);
+    });
+
+    it("同一個燈位被第二個櫃台認領：409", async () => {
+      const { slots } = await createWallWithSlots(1);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
+      const res = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "乙", amount: 600 }).expect(409);
+      expect(res.body.message).toContain("此燈位已被其他櫃台認領");
+    });
+
+    it("兩個櫃台同時搶同一個燈位：只有一個成功", async () => {
+      const { slots } = await createWallWithSlots(1);
+      const [a, b] = await Promise.all([
+        volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "A", amount: 600 }),
+        finance.post("/lantern/claims", { slotId: slots[0].id, walkInName: "B", amount: 600 }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([201, 409]);
+    });
+
+    it("燈位或信徒不存在：404；金額為負：400", async () => {
+      const { slots } = await createWallWithSlots(1);
+      await volunteer.post("/lantern/claims", { slotId: GHOST_ID, walkInName: "甲", amount: 1 }).expect(404);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, memberId: GHOST_ID, amount: 1 }).expect(404);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: -1 }).expect(400);
+      await volunteer.post("/lantern/claims", { slotId: "abc", walkInName: "甲", amount: 1 }).expect(400);
+    });
+
+    it("可以修正已認領燈位的姓名與點燈內容", async () => {
+      const { wall, slots } = await createWallWithSlots(1);
+      const claimed = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "打錯字", amount: 600 }).expect(201);
+      const res = await volunteer
+        .patch(`/lantern/claims/${claimed.body.slot.claim.id}`, { walkInName: "王小明", lanternType: "平安燈" })
+        .expect(200);
+      expect(res.body.claim).toMatchObject({ memberName: "王小明", lanternType: "平安燈" });
+      expect((await slotsOf(wall.id))[0].claim).toMatchObject({ memberName: "王小明" });
+      await volunteer.patch(`/lantern/claims/${GHOST_ID}`, { walkInName: "x" }).expect(404);
+    });
+
+    it("收據與列印資料顯示「燈牆，燈位：代碼」", async () => {
+      const { slots } = await createWallWithSlots(1, "右牆");
+      const claimed = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "龔忠欣", amount: 600 }).expect(201);
+      const details = (await volunteer.get("/print/receipts/details").expect(200)).body;
+      expect(details.items[0]).toMatchObject({ payerName: "龔忠欣", description: "右牆", amount: 600 });
+
+      const label = await volunteer.get(`/print/lantern-label/${claimed.body.slot.claim.id}`).expect(200);
+      expect(label.text).toContain("右牆");
+      expect(label.text).toContain("A-01");
+      expect(label.text).toContain("龔忠欣");
+    });
+  });
+
+  // ───────────────────────────── 活動報名頁：合併送出 ─────────────────────────────
+  describe("合併送出（一張收據包含多個項目）", () => {
+    it("單人點燈：備註是「燈牆，燈位：代碼」，不加姓名", async () => {
+      const { slots } = await createWallWithSlots(1, "右牆");
+      const res = await volunteer
+        .post("/activities/submit", { pendingLanternClaims: [{ slotId: slots[0].id, walkInName: "龔忠欣", amount: 600 }] })
+        .expect(201);
+      expect(res.body.receipt).toMatchObject({ amount: 600, payerName: "龔忠欣", sourceType: "COMBINED" });
+      expect(res.body.receipt.items[0]).toMatchObject({ description: "右牆", note: "右牆，燈位：A-01" });
+    });
+
+    it("同一個人點兩盞燈：仍然不加姓名", async () => {
+      const { slots } = await createWallWithSlots(2, "右牆");
+      const res = await volunteer
+        .post("/activities/submit", {
+          pendingLanternClaims: [
+            { slotId: slots[0].id, walkInName: "龔忠欣", amount: 600 },
+            { slotId: slots[1].id, walkInName: "龔忠欣", amount: 600 },
+          ],
+        })
+        .expect(201);
+      expect(res.body.receipt.items.map((i: { note: string }) => i.note)).toEqual(["右牆，燈位：A-01", "右牆，燈位：A-02"]);
+    });
+
+    it("多人點燈：備註前面加上姓名「人，燈牆，燈位：代碼」", async () => {
+      const { slots } = await createWallWithSlots(2, "右牆");
+      const res = await volunteer
+        .post("/activities/submit", {
+          pendingLanternClaims: [
+            { slotId: slots[0].id, walkInName: "王小明", amount: 600 },
+            { slotId: slots[1].id, walkInName: "李大華", amount: 600 },
+          ],
+        })
+        .expect(201);
+      expect(res.body.receipt.amount).toBe(1200);
+      expect(res.body.receipt.items.map((i: { note: string }) => i.note)).toEqual([
+        "王小明，右牆，燈位：A-01",
+        "李大華，右牆，燈位：A-02",
+      ]);
+    });
+
+    it("整戶點燈：每人一盞、金額均分，備註列出燈位；選位數與人數不符 400", async () => {
+      const { wall, slots } = await createWallWithSlots(3);
+      const token = fx.tokens[UserRole.VOLUNTEER];
+      const a = await createMember(app, token, "陳一", "陳家");
+      await createMember(app, token, "陳二", "陳家");
+      const base = { wallId: wall.id, householdId: a.householdId, amount: 1200 };
+
+      await volunteer.post("/activities/submit", { pendingHouseholdLanternClaims: [{ ...base, slotIds: [slots[0].id] }] }).expect(400);
+
+      const res = await volunteer
+        .post("/activities/submit", { pendingHouseholdLanternClaims: [{ ...base, slotIds: [slots[0].id, slots[1].id] }] })
+        .expect(201);
+      expect(res.body.receipt).toMatchObject({ amount: 1200, payerName: "陳一、陳二" });
+      expect(res.body.receipt.items[0]).toMatchObject({ description: "點燈*2人", note: "燈位｜A-01、A-02" });
+      expect((await slotsOf(wall.id)).map((s) => s.status)).toEqual(["CLAIMED", "CLAIMED", "EMPTY"]);
+    });
+
+    it("點燈 + 捐款 + 活動報名 + 送禮合併成一張收據，金額加總", async () => {
+      const { slots } = await createWallWithSlots(1);
+      const ceremony = (
+        await director
+          .post("/ceremony/ceremonies", { templeId: fx.templeId, name: "法會", date: "2099-01-01", feeMode: CeremonyFeeMode.FREE_WILL })
+          .expect(201)
+      ).body;
+      const member = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "王小明");
+
+      const res = await volunteer
+        .post("/activities/submit", {
+          pendingLanternClaims: [{ slotId: slots[0].id, memberId: member.id, amount: 600 }],
+          pendingCeremonyRegistrations: [{ ceremonyId: ceremony.id, memberId: member.id, amount: 1000 }],
+          donation: { templeId: fx.templeId, memberId: member.id, type: DonationType.GENERAL, amount: 500 },
+          gift: { templeId: fx.templeId, memberId: member.id, items: [{ giftType: GiftType.FLOWERS, quantity: 2 }] },
+        })
+        .expect(201);
+
+      expect(res.body.receipt).toMatchObject({ amount: 2100, payerName: "王小明", sourceType: "COMBINED" });
+      expect(res.body.receipt.items.map((i: { description: string; amount: number }) => [i.description, i.amount])).toEqual([
+        ["右牆", 600],
+        ["法會", 1000],
+        ["一般捐款", 500],
+        ["送禮", 0],
+      ]);
+      expect(res.body.receipt.items[3].note).toBe("品項：鮮花x2");
+      expect(res.body.donation).toMatchObject({ amount: 500, type: DonationType.GENERAL });
+      expect(res.body.gifts).toHaveLength(1);
+    });
+
+    it("完全沒有項目：400", async () => {
+      const res = await volunteer.post("/activities/submit", {}).expect(400);
+      expect(res.body.message).toBe("尚未填寫任何活動項目");
+    });
+
+    it("其中一項失敗：前面已經卡到的燈位會放掉，也不會開出收據", async () => {
+      const { wall, slots } = await createWallWithSlots(2);
+      await volunteer.post("/lantern/claims", { slotId: slots[1].id, walkInName: "先來的", amount: 600 }).expect(201);
+
+      await volunteer
+        .post("/activities/submit", {
+          pendingLanternClaims: [
+            { slotId: slots[0].id, walkInName: "後到的", amount: 600 },
+            { slotId: slots[1].id, walkInName: "後到的", amount: 600 }, // 已被認領
+          ],
+        })
+        .expect(409);
+
+      const after = await slotsOf(wall.id);
+      expect(after[0].status).toBe("EMPTY");
+      expect(after[1].claim?.memberName).toBe("先來的");
+      const receipts = (await volunteer.get("/lantern/receipts").expect(200)).body;
+      expect(receipts.total).toBe(1);
+    });
+
+    it("巢狀項目也會做輸入驗證（送禮數量 0 → 400）", async () => {
+      await volunteer
+        .post("/activities/submit", { gift: { templeId: fx.templeId, walkInName: "甲", items: [{ giftType: GiftType.WATER, quantity: 0 }] } })
+        .expect(400);
+      await volunteer
+        .post("/activities/submit", { gift: { templeId: fx.templeId, walkInName: "甲", items: [] } })
+        .expect(400);
+    });
+
+    it("資料建檔人員（DATA_ENTRY）不能辦理報名：403", async () => {
+      await api(app, fx.tokens[UserRole.DATA_ENTRY]).post("/activities/submit", {}).expect(403);
+    });
+  });
+
+  // ───────────────────────────── 捐款 ─────────────────────────────
+  describe("捐款", () => {
+    const donate = (body: Record<string, unknown>, client = volunteer) =>
+      client.post("/lantern/donations", { templeId: fx.templeId, walkInName: "善心人士", type: DonationType.GENERAL, amount: 1000, ...body });
+
+    it("建立捐款並開立收據", async () => {
+      const res = await donate({}).expect(201);
+      expect(res.body.donation).toMatchObject({ amount: 1000, type: DonationType.GENERAL, walkInName: "善心人士" });
+      expect(res.body.receipt).toMatchObject({ amount: 1000, sourceType: "DONATION", status: "ISSUED" });
+    });
+
+    it("自訂捐款項目與數量只有總幹事可以填", async () => {
+      await donate({ customItem: "金牌", quantity: 2 }).expect(403);
+      await donate({ customItem: "金牌", quantity: 2 }, director).expect(201);
+      const details = (await volunteer.get("/print/receipts/details").expect(200)).body;
+      expect(details.items[0]).toMatchObject({ description: "一般捐款", payerName: "善心人士" });
+    });
+
+    it("指定捐給某個活動：算進該活動的捐款，項目名稱是「活動名稱 捐款」", async () => {
+      const ceremony = (
+        await director
+          .post("/ceremony/ceremonies", { templeId: fx.templeId, name: "建醮", date: "2099-01-01", feeMode: CeremonyFeeMode.FREE_WILL })
+          .expect(201)
+      ).body;
+      await donate({ ceremonyId: ceremony.id, amount: 5000 }).expect(201);
+      await donate({ ceremonyId: GHOST_ID }).expect(404);
+
+      const report = (await volunteer.get(`/ceremony/ceremonies/${ceremony.id}/report`).expect(200)).body;
+      expect(report.donationTotal).toBe(5000);
+      expect(report.donations[0]).toMatchObject({ payerName: "善心人士", amount: 5000 });
+      const details = (await volunteer.get("/print/receipts/details").expect(200)).body;
+      expect(details.items[0].description).toBe("建醮 捐款");
+    });
+
+    it.each([
+      ["捐款類型不合法", { type: "BRIBE" }],
+      ["金額為負", { amount: -1 }],
+      ["數量為 0", { quantity: 0 }],
+      ["廟宇 id 不是 UUID", { templeId: "x" }],
+    ])("輸入驗證：%s → 400", async (_label, overrides) => {
+      await donate(overrides, director).expect(400);
+    });
+  });
+
+  // ───────────────────────────── 收據查詢／作廢／刪除 ─────────────────────────────
+  describe("收據查詢", () => {
+    it("可以用姓名或收據編號搜尋、用活動類型篩選、分頁", async () => {
+      const { slots } = await createWallWithSlots(1);
+      const member = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "王小明");
+      const lantern = await volunteer.post("/lantern/claims", { slotId: slots[0].id, memberId: member.id, amount: 600 }).expect(201);
+      await volunteer
+        .post("/lantern/donations", { templeId: fx.templeId, walkInName: "李大華", type: DonationType.GENERAL, amount: 100 })
+        .expect(201);
+      await volunteer
+        .post("/activities/submit", { donation: { templeId: fx.templeId, walkInName: "合併的人", type: DonationType.PUDU, amount: 50 } })
+        .expect(201);
+
+      const all = (await volunteer.get("/lantern/receipts").expect(200)).body;
+      expect(all).toMatchObject({ total: 3, page: 1, pageSize: 20 });
+
+      const byMember = (await volunteer.get(`/lantern/receipts?keyword=${encodeURIComponent("小明")}`).expect(200)).body;
+      expect(byMember.items.map((r: { id: string }) => r.id)).toEqual([lantern.body.receipt.id]);
+      const byWalkIn = (await volunteer.get(`/lantern/receipts?keyword=${encodeURIComponent("大華")}`).expect(200)).body;
+      expect(byWalkIn.total).toBe(1);
+      const byNo = (await volunteer.get(`/lantern/receipts?keyword=${lantern.body.receipt.receiptNo}`).expect(200)).body;
+      expect(byNo.total).toBe(1);
+      const none = (await volunteer.get(`/lantern/receipts?keyword=${encodeURIComponent("查無此人")}`).expect(200)).body;
+      expect(none).toMatchObject({ total: 0, items: [] });
+
+      // 捐款類型：單筆捐款收據 + 內含捐款的合併收據
+      const donations = (await volunteer.get("/lantern/receipts?sourceType=DONATION").expect(200)).body;
+      expect(donations.total).toBe(2);
+      const lanterns = (await volunteer.get("/lantern/receipts?sourceType=LANTERN_CLAIM").expect(200)).body;
+      expect(lanterns.total).toBe(1);
+
+      const page2 = (await volunteer.get("/lantern/receipts?page=2&pageSize=2").expect(200)).body;
+      expect(page2.items).toHaveLength(1);
+      expect(page2.total).toBe(3);
+    });
+  });
+
+  describe("收據作廢", () => {
+    const issueLanternReceipt = async () => {
+      const { wall, slots } = await createWallWithSlots(1);
+      const res = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
+      return { wall, receiptId: res.body.receipt.id as string };
+    };
+
+    it("財務可以作廢：收據變成已作廢，燈位釋出可以重新認領", async () => {
+      const { wall, receiptId } = await issueLanternReceipt();
+      const res = await finance.post(`/lantern/receipts/${receiptId}/void`, { reason: "金額打錯" }).expect(201);
+      expect(res.body.status).toBe("VOIDED");
+
+      const [slot] = await slotsOf(wall.id);
+      expect(slot.status).toBe("EMPTY");
+      await volunteer.post("/lantern/claims", { slotId: slot.id, walkInName: "乙", amount: 600 }).expect(201);
+    });
+
+    it("志工、報名櫃檯不能作廢：403", async () => {
+      const { receiptId } = await issueLanternReceipt();
+      await volunteer.post(`/lantern/receipts/${receiptId}/void`, { reason: "金額打錯" }).expect(403);
+      await api(app, fx.tokens[UserRole.REGISTRAR]).post(`/lantern/receipts/${receiptId}/void`, { reason: "金額打錯" }).expect(403);
+    });
+
+    it("邊界值：作廢原因至少 2 個字", async () => {
+      const { receiptId } = await issueLanternReceipt();
+      await finance.post(`/lantern/receipts/${receiptId}/void`, { reason: "錯" }).expect(400);
+      await finance.post(`/lantern/receipts/${receiptId}/void`, {}).expect(400);
+      await finance.post(`/lantern/receipts/${receiptId}/void`, { reason: "打錯" }).expect(201);
+    });
+
+    it("已作廢的收據不能再作廢：409；不存在的收據：404", async () => {
+      const { receiptId } = await issueLanternReceipt();
+      await finance.post(`/lantern/receipts/${receiptId}/void`, { reason: "打錯" }).expect(201);
+      const again = await finance.post(`/lantern/receipts/${receiptId}/void`, { reason: "打錯" }).expect(409);
+      expect(again.body.message).toBe("收據已經作廢過了");
+      await finance.post(`/lantern/receipts/${GHOST_ID}/void`, { reason: "打錯" }).expect(404);
+    });
+
+    it("作廢合併收據：裡面的燈位與活動座位一起釋出", async () => {
+      const { wall, slots } = await createWallWithSlots(1);
+      const ceremony = (
+        await director
+          .post("/ceremony/ceremonies", {
+            templeId: fx.templeId,
+            name: "法會",
+            date: "2099-01-01",
+            feeMode: CeremonyFeeMode.FREE_WILL,
+            tableCount: 1,
+            seatsPerTable: 2,
+          })
+          .expect(201)
+      ).body;
+      const submitted = await volunteer
+        .post("/activities/submit", {
+          pendingLanternClaims: [{ slotId: slots[0].id, walkInName: "甲", amount: 600 }],
+          pendingCeremonyRegistrations: [{ ceremonyId: ceremony.id, walkInName: "甲", amount: 1000, seatIndex: 1 }],
+        })
+        .expect(201);
+
+      await finance.post(`/lantern/receipts/${submitted.body.receipt.id}/void`, { reason: "全部取消" }).expect(201);
+
+      expect((await slotsOf(wall.id))[0].status).toBe("EMPTY");
+      const seats = (await volunteer.get(`/ceremony/ceremonies/${ceremony.id}/seats`).expect(200)).body;
+      expect(seats.every((s: { status: string }) => s.status === "EMPTY")).toBe(true);
+    });
+
+    it("作廢的捐款不算進信徒的歷史紀錄", async () => {
+      const member = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "王小明");
+      const res = await volunteer
+        .post("/lantern/donations", { templeId: fx.templeId, memberId: member.id, type: DonationType.GENERAL, amount: 100 })
+        .expect(201);
+      expect((await volunteer.get(`/lantern/members/${member.id}/history`).expect(200)).body).toHaveLength(1);
+      await finance.post(`/lantern/receipts/${res.body.receipt.id}/void`, { reason: "重複" }).expect(201);
+      expect((await volunteer.get(`/lantern/members/${member.id}/history`).expect(200)).body).toEqual([]);
+    });
+  });
+
+  describe("收據永久刪除（僅總幹事）", () => {
+    it("刪除後收據與來源紀錄都消失；財務不能刪", async () => {
+      const { wall, slots } = await createWallWithSlots(1);
+      const res = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
+      const receiptId = res.body.receipt.id;
+
+      await finance.delete(`/lantern/receipts/${receiptId}`).expect(403);
+      await director.delete(`/lantern/receipts/${receiptId}`).expect(200);
+
+      expect((await volunteer.get("/lantern/receipts").expect(200)).body.total).toBe(0);
+      expect((await slotsOf(wall.id))[0].status).toBe("EMPTY");
+      await director.delete(`/lantern/receipts/${receiptId}`).expect(404);
+    });
+  });
+
+  // ───────────────────────────── 列印 ─────────────────────────────
+  describe("收據列印", () => {
+    it("列印頁包含姓名、金額、備註與廟名；存根聯與收執聯各一份", async () => {
+      const { slots } = await createWallWithSlots(1, "右牆");
+      const submitted = await volunteer
+        .post("/activities/submit", { pendingLanternClaims: [{ slotId: slots[0].id, walkInName: "龔忠欣", amount: 600 }] })
+        .expect(201);
+      const res = await volunteer.get(`/print/receipt/${submitted.body.receipt.id}`).expect(200);
+      expect(res.headers["content-type"]).toContain("text/html");
+      expect(res.text).toContain("感謝狀");
+      expect(res.text).toContain("龔忠欣");
+      expect(res.text).toContain("NT$ 600");
+      expect(res.text).toContain("右牆，燈位：A-01");
+      expect(res.text).toContain("測試宮");
+      expect(res.text).toContain("存<br/>根<br/>聯");
+      expect(res.text).toContain("收<br/>執<br/>聯");
+      expect(res.text).not.toContain("作廢 VOID");
+    });
+
+    it("已作廢的收據列印時蓋上作廢章", async () => {
+      const donated = await volunteer
+        .post("/lantern/donations", { templeId: fx.templeId, walkInName: "甲", type: DonationType.GENERAL, amount: 100 })
+        .expect(201);
+      await finance.post(`/lantern/receipts/${donated.body.receipt.id}/void`, { reason: "打錯" }).expect(201);
+      const res = await volunteer.get(`/print/receipt/${donated.body.receipt.id}`).expect(200);
+      expect(res.text).toContain("作廢 VOID");
+    });
+
+    it("姓名裡的 HTML 會被跳脫，不會變成可執行的標籤（防 XSS）", async () => {
+      const evil = `<script>alert("x")</script>`;
+      const donated = await volunteer
+        .post("/lantern/donations", { templeId: fx.templeId, walkInName: evil, type: DonationType.GENERAL, amount: 100 })
+        .expect(201);
+      const res = await volunteer.get(`/print/receipt/${donated.body.receipt.id}`).expect(200);
+      expect(res.text).not.toContain(evil);
+      expect(res.text).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
+    });
+
+    it("匯出用的結構化資料", async () => {
+      const donated = await volunteer
+        .post("/lantern/donations", { templeId: fx.templeId, walkInName: "甲", type: DonationType.GENERAL, amount: 100 })
+        .expect(201);
+      const res = await volunteer.get(`/print/receipt/${donated.body.receipt.id}/data`).expect(200);
+      expect(res.body).toMatchObject({
+        receiptNo: donated.body.receipt.receiptNo,
+        amount: 100,
+        status: "ISSUED",
+        payerName: "甲",
+        templeName: "測試宮",
+        committeeName: "測試宮",
+        issuedByName: "測試-VOLUNTEER",
+      });
+    });
+
+    it("收據不存在：404", async () => {
+      await volunteer.get(`/print/receipt/${GHOST_ID}`).expect(404);
+      await volunteer.get(`/print/lantern-label/${GHOST_ID}`).expect(404);
+    });
+  });
+});

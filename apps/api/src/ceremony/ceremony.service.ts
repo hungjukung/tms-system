@@ -234,6 +234,8 @@ export class CeremonyService {
       await this.householdService.findMemberById(dto.memberId);
     }
 
+    this.assertHasParticipantName(dto);
+
     if (ceremony.kind === CeremonyKind.JIGAI) {
       return this.createJigaiRegistrationRecord(dto, ceremony, userId);
     }
@@ -335,6 +337,13 @@ export class CeremonyService {
     throw new ConflictException("報名人數眾多，取號失敗，請重新送出");
   }
 
+  /** 報名至少要知道是誰：必須選一位信徒，或填寫姓名（只有空白不算） */
+  private assertHasParticipantName(dto: RegisterCeremonyDto): void {
+    if (!dto.memberId && !dto.walkInName?.trim()) {
+      throw new BadRequestException("請選擇信徒或填寫報名者姓名");
+    }
+  }
+
   /** 活動的座位總數：一般活動為桌數 × 每桌人數，進香為遊覽車固定座位數；未設定座位時為 null */
   private totalSeatsOf(ceremony: Ceremony): number | null {
     if (ceremony.kind === CeremonyKind.PILGRIMAGE) return PILGRIMAGE_BUS_SEAT_COUNT;
@@ -389,6 +398,7 @@ export class CeremonyService {
     for (const seatIndex of seatIndexes) {
       if (!this.isValidSeat(ceremony, seatIndex)) throw new BadRequestException("座位超出範圍");
     }
+    this.assertHasParticipantName(dto);
     // 每個座位對應的信徒 id：第一個座位是報名者本人，其餘是同行乘客（空字串代表臨櫃、沒有對應信徒）
     const seatMemberIds = seatIndexes.map((_, i) =>
       i === 0 ? (dto.memberId ?? "") : (dto.passengerMemberIds?.[i] ?? "").trim(),
@@ -726,6 +736,7 @@ export class CeremonyService {
     if (ceremony.kind !== CeremonyKind.GENERAL || !ceremony.tableCount || !ceremony.seatsPerTable) {
       throw new BadRequestException("此活動未設定座位");
     }
+    this.assertHasParticipantName(dto);
     const tableNumber = dto.tableNumber as number;
     if (tableNumber < 1 || tableNumber > ceremony.tableCount) {
       throw new BadRequestException("桌號超出範圍");

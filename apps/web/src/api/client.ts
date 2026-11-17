@@ -13,7 +13,10 @@ apiClient.interceptors.request.use((config) => {
 apiClient.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    // 登入失敗（帳號或密碼錯誤）也是 401，但那時還沒有登入，不能整頁重新載入，
+    // 否則登入頁剛設定好的錯誤訊息會被洗掉
+    const isLoginRequest = String(err.config?.url ?? "").includes("/auth/login");
+    if (err.response?.status === 401 && !isLoginRequest) {
       sessionStorage.removeItem("tms_token");
       sessionStorage.removeItem("tms_user");
       window.location.href = "/login";

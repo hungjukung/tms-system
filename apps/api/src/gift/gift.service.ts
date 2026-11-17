@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { GiftDto, GiftType } from "@tms/shared";
@@ -30,6 +30,9 @@ export class GiftService {
     dto: CreateGiftDto,
     userId: string,
   ): Promise<{ gifts: GiftDto[]; payerName: string; description: string; note: string; templeId: string }> {
+    if (!dto.memberId && !dto.walkInName?.trim()) {
+      throw new BadRequestException("請選擇信徒或填寫送禮人姓名");
+    }
     if (dto.memberId) {
       await this.householdService.findMemberById(dto.memberId);
     }

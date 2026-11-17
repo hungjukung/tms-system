@@ -1,3 +1,4 @@
+import { positiveInt } from "../common/query-utils";
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { UserRole } from "@tms/shared";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -54,6 +55,6 @@ export class InventoryController {
   @Get("items/:id/transactions")
   @Roles(UserRole.VOLUNTEER, UserRole.FINANCE, UserRole.DIRECTOR)
   listTransactions(@Param("id") id: string, @Query("limit") limit = "50") {
-    return this.inventoryService.listTransactions(id, Number(limit));
+    return this.inventoryService.listTransactions(id, positiveInt(limit, 50));
   }
 }

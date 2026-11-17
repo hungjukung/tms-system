@@ -1,3 +1,4 @@
+import { positiveInt } from "../common/query-utils";
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { BulkImportMembersResponse, HouseholdDto, MemberDto, UserRole } from "@tms/shared";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -35,7 +36,7 @@ export class HouseholdController {
     @Query("page") page = "1",
     @Query("pageSize") pageSize = "20",
   ) {
-    return this.householdService.searchHouseholds(keyword, Number(page), Number(pageSize));
+    return this.householdService.searchHouseholds(keyword, positiveInt(page, 1, 1_000_000), positiveInt(pageSize, 20));
   }
 
   @Get("households/:id/members")
@@ -75,7 +76,7 @@ export class HouseholdController {
     @Query("page") page = "1",
     @Query("pageSize") pageSize = "20",
   ) {
-    return this.householdService.searchMembers(keyword, Number(page), Number(pageSize));
+    return this.householdService.searchMembers(keyword, positiveInt(page, 1, 1_000_000), positiveInt(pageSize, 20));
   }
 
   @Get("members/:id")

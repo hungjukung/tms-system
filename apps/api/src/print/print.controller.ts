@@ -1,3 +1,4 @@
+import { positiveInt } from "../common/query-utils";
 import { Controller, Get, Param, Query, Req, Res, UseGuards } from "@nestjs/common";
 import { Request, Response } from "express";
 import { ReceiptSourceType, UserRole } from "@tms/shared";
@@ -85,7 +86,12 @@ export class PrintController {
     @Query("pageSize") pageSize = "20",
     @Query("sourceType") sourceType?: ReceiptSourceType,
   ) {
-    const result = await this.lanternService.listReceipts(keyword, Number(page), Number(pageSize), sourceType);
+    const result = await this.lanternService.listReceipts(
+      keyword,
+      positiveInt(page, 1, 1_000_000),
+      positiveInt(pageSize, 20),
+      sourceType,
+    );
     const items = await Promise.all(
       result.items.map(async (receipt) => {
         if (receipt.sourceType === ReceiptSourceType.COMBINED) {

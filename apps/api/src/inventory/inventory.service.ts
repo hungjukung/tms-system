@@ -27,8 +27,14 @@ export class InventoryService {
       lowStockThreshold: dto.lowStockThreshold,
       currentStock: dto.initialStock ?? 0,
     });
-    const saved = await this.itemRepo.save(item);
-    return this.toDto(saved);
+    try {
+      return this.toDto(await this.itemRepo.save(item));
+    } catch (err) {
+      if (err instanceof QueryFailedError && (err as any).code === PG_UNIQUE_VIOLATION) {
+        throw new ConflictException("已有同名的物資項目");
+      }
+      throw err;
+    }
   }
 
   async updateItem(id: string, dto: UpdateInventoryItemDto): Promise<InventoryItemDto> {

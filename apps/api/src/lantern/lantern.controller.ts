@@ -1,3 +1,4 @@
+import { positiveInt } from "../common/query-utils";
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { ReceiptSourceType, UserRole } from "@tms/shared";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
@@ -104,7 +105,7 @@ export class LanternController {
     @Query("pageSize") pageSize = "20",
     @Query("sourceType") sourceType?: ReceiptSourceType,
   ) {
-    return this.lanternService.listReceipts(keyword, Number(page), Number(pageSize), sourceType);
+    return this.lanternService.listReceipts(keyword, positiveInt(page, 1, 1_000_000), positiveInt(pageSize, 20), sourceType);
   }
 
   @Post("lantern/receipts/:id/void")

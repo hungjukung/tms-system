@@ -187,6 +187,9 @@ export class LanternService {
     dto: ClaimSlotDto,
     userId: string,
   ): Promise<{ slotDto: LanternSlotDto; claim: LanternClaim; templeId: string }> {
+    if (!dto.memberId && !dto.walkInName?.trim()) {
+      throw new BadRequestException("請選擇信徒或填寫姓名");
+    }
     const slot = await this.slotRepo.findOne({ where: { id: dto.slotId } });
     if (!slot) throw new NotFoundException("找不到燈位");
     const wall = await this.wallRepo.findOne({ where: { id: slot.wallId } });
@@ -378,6 +381,9 @@ export class LanternService {
   private async createDonationRecord(dto: CreateDonationDto, userId: string, userRole: UserRole): Promise<Donation> {
     if ((dto.customItem || dto.quantity !== undefined) && userRole !== UserRole.DIRECTOR) {
       throw new ForbiddenException("只有總幹事可以自訂捐款項目與數量");
+    }
+    if (!dto.memberId && !dto.walkInName?.trim()) {
+      throw new BadRequestException("請選擇信徒或填寫捐款人姓名");
     }
     if (dto.memberId) {
       await this.householdService.findMemberById(dto.memberId);
@@ -972,9 +978,7 @@ export class LanternService {
     issuedByName: string,
     templeId: string,
   ): Promise<ReceiptDto> {
-    const receiptNo = this.generateReceiptNo();
-    const receipt = this.receiptRepo.create({
-      receiptNo,
+    const saved = await this.saveReceiptWithUniqueNo({
       sourceType,
       sourceId,
       templeId,
@@ -982,7 +986,6 @@ export class LanternService {
       status: ReceiptStatus.ISSUED,
       issuedByUserId: userId,
     });
-    const saved = await this.receiptRepo.save(receipt);
     await this.auditLogRepo.save(
       this.auditLogRepo.create({ receiptId: saved.id, action: "ISSUE", performedByUserId: userId, reason: null }),
     );
@@ -999,10 +1002,8 @@ export class LanternService {
     userId: string,
     templeId: string,
   ): Promise<ReceiptDto> {
-    const receiptNo = this.generateReceiptNo();
     const totalAmount = items.reduce((sum, item) => sum + item.amount, 0);
-    const receipt = this.receiptRepo.create({
-      receiptNo,
+    const saved = await this.saveReceiptWithUniqueNo({
       sourceType: ReceiptSourceType.COMBINED,
       sourceId: null,
       templeId,
@@ -1012,12 +1013,30 @@ export class LanternService {
       payerName,
       items,
     });
-    const saved = await this.receiptRepo.save(receipt);
     await this.auditLogRepo.save(
       this.auditLogRepo.create({ receiptId: saved.id, action: "ISSUE", performedByUserId: userId, reason: null }),
     );
     const issuer = await this.userRepo.findOne({ where: { id: userId } });
     return this.toReceiptDto(saved, issuer?.displayName ?? "");
+  }
+
+  /**
+   * 收據編號絕對不能重複：資料庫對 receiptNo 有唯一約束，這裡先查一次是否已被使用，
+   * 真的同時撞號（兩個櫃台同一瞬間產生同一組號碼）時由唯一約束擋下，再換一組號碼重存。
+   * 連續 10 次都撞號才放棄（一天 90 萬組號碼，正常情況不會發生）。
+   */
+  private async saveReceiptWithUniqueNo(data: Partial<Receipt>): Promise<Receipt> {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const receiptNo = this.generateReceiptNo();
+      if (await this.receiptRepo.findOne({ where: { receiptNo } })) continue;
+      try {
+        return await this.receiptRepo.save(this.receiptRepo.create({ ...data, receiptNo }));
+      } catch (err) {
+        if (err instanceof QueryFailedError && (err as any).code === PG_UNIQUE_VIOLATION) continue;
+        throw err;
+      }
+    }
+    throw new ConflictException("收據編號產生失敗，請重新送出");
   }
 
   private generateReceiptNo(): string {

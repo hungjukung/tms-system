@@ -11,3 +11,10 @@ build
 .git
 apps/api/uploads
 apps/api/test-seal.png
+coverage
+**/coverage
+e2e
+e2e-report
+e2e-results
+**/test
+playwright.config.ts

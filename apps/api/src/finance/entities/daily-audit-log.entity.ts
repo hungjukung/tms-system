@@ -2,7 +2,7 @@ import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn, Unique } from
 
 /** 「審核日誌」：標記某廟某天已完成當日收支審核（點燈/捐款/法會報名/送禮等已開立收據的收入 + 手動流水帳項目一併審核） */
 @Entity("daily_audit_logs")
-@Unique(["templeId", "date"])
+@Unique("UQ_daily_audit_logs_temple_date", ["templeId", "date"])
 export class DailyAuditLog {
   @PrimaryGeneratedColumn("uuid")
   id: string;
