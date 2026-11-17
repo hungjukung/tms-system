@@ -499,11 +499,19 @@ export interface CeremonyExpenseDto {
   occurredAt: string;
 }
 
-/** 進香房型：每個房型有固定入住人數與費用（整間房的總價） */
+/** 進香房型：每間房最多入住人數、費用（整間房的總價）與可預訂的房間數 */
 export interface PilgrimageRoomType {
   name: string;
+  /** 每間房最多入住人數（報名人數可以少於此數，但不能超過） */
   capacity: number;
   fee: number;
+  /** 此房型共有幾間；舊資料沒設定時為 null，代表不限間數 */
+  roomCount: number | null;
+}
+
+/** 活動資料回傳的房型：另外附上已被預訂的間數 */
+export interface PilgrimageRoomTypeStatus extends PilgrimageRoomType {
+  roomsBooked: number;
 }
 
 export interface CeremonyDto {
@@ -527,8 +535,11 @@ export interface CeremonyDto {
   afternoonRegistered: number;
   /** 報名期限：超過此日期後，此活動會從「活動報名」頁的選單隱藏 */
   registrationDeadline: string | null;
-  /** 進香：房型清單（名稱、人數、費用）；沒設定房型時為 null */
-  roomTypes: PilgrimageRoomType[] | null;
+  /** 進香：房型清單（名稱、人數、費用、間數與已訂間數）；沒設定房型時為 null */
+  roomTypes: PilgrimageRoomTypeStatus[] | null;
+  /** 進香：遊覽車台數與可載人數（台數 × 每台座位數）；未設定時為 null */
+  busCount: number | null;
+  busCapacity: number | null;
   /** 供「建立活動」頁列表顯示：此活動至今累積的報名筆數與收款總額 */
   registrationCount: number;
   totalAmount: number;
@@ -548,6 +559,7 @@ export interface CreateCeremonyRequest {
   morningCapacity?: number;
   afternoonCapacity?: number;
   roomTypes?: PilgrimageRoomType[];
+  busCount?: number;
 }
 
 export interface UpdateCeremonyRequest {
@@ -562,6 +574,7 @@ export interface UpdateCeremonyRequest {
   morningCapacity?: number | null;
   afternoonCapacity?: number | null;
   roomTypes?: PilgrimageRoomType[] | null;
+  busCount?: number | null;
 }
 
 export interface CeremonyRegistrationDto {
@@ -579,6 +592,9 @@ export interface CeremonyRegistrationDto {
   /** 祭改：場次與該場號碼（從 1 號起） */
   session: CeremonySession | null;
   queueNumber: number | null;
+  /** 進香：所訂房型與第幾間（同一間房的參加者第幾間相同） */
+  roomType: string | null;
+  roomNumber: number | null;
   createdAt: string;
   /** 這筆報名對應的收據 id（單筆或合併收據皆可能，找不到時為 null），供「報名名單」查看/刪除收據使用 */
   receiptId: string | null;
@@ -605,11 +621,9 @@ export interface RegisterCeremonyRequest {
   noSeatNeeded?: boolean;
   /** 祭改活動：報名的場次，報名時依序給予該場號碼（從 1 號起） */
   session?: CeremonySession;
-  /** 進香：同一位報名者一次選多個座位（多人同行），每個座位各建立一筆報名紀錄 */
-  seatIndexes?: number[];
-  /** 進香多人報名：與 seatIndexes 一一對應的同行乘客信徒 id（第一個座位是報名者本人，填空字串；臨櫃乘客也填空字串） */
+  /** 進香多人報名：每位參加者的信徒 id（第 1 位是報名者本人，填空字串；臨櫃參加者也填空字串），陣列長度就是參加人數 */
   passengerMemberIds?: string[];
-  /** 進香多人報名：與 seatIndexes 一一對應的臨櫃乘客姓名（有選信徒的座位以信徒姓名為準），留空則沿用報名者姓名 */
+  /** 進香多人報名：與 passengerMemberIds 一一對應的臨櫃參加者姓名（有選信徒的以信徒姓名為準），留空則沿用報名者姓名 */
   passengerNames?: string[];
 }
 

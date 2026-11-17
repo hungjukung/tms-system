@@ -29,9 +29,7 @@ import {
   CeremonyKind,
   CeremonyRegistrationDto,
   CeremonySession,
-  PILGRIMAGE_BUS_ROWS,
   PILGRIMAGE_BUS_SEAT_COUNT,
-  PILGRIMAGE_BUS_SEATS_PER_ROW,
   GenerateLanternSlotsRequest,
   LANTERN_TYPE_OPTIONS,
   LanternSlotDto,
@@ -60,7 +58,6 @@ import {
 } from "../api/lantern";
 import { openPrintWindow } from "../api/client";
 import { MemberSelect } from "../components/MemberSelect";
-import { BusSeatMap } from "../components/BusSeatMap";
 import { useAuth } from "../context/AuthContext";
 import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportRowsToExcel } from "../utils/export";
@@ -80,17 +77,79 @@ const feeModeLabel: Record<CeremonyFeeMode, string> = {
   [CeremonyFeeMode.FIXED_AMOUNT]: "固定金額",
 };
 
-/** 報名名單上的座位欄：祭改顯示「上午場 3號」，進香顯示「3排2號」，一般活動維持原本的「桌-位」 */
+/**
+ * 報名名單上的座位欄：祭改顯示「上午場 3號」，進香顯示「雙人房 第2間」（同一間的參加者第幾間相同；
+ * 改版前用遊覽車座位圖報名的舊資料顯示「3排2號」），一般活動維持原本的「桌-位」
+ */
 function registrationSeatText(r: CeremonyRegistrationDto, kind: CeremonyKind): string {
   if (r.queueNumber != null) {
     return `${r.session === CeremonySession.AM ? "上午場" : r.session === CeremonySession.PM ? "下午場" : ""} ${r.queueNumber}號`.trim();
   }
+  if (r.roomType) return r.roomNumber != null ? `${r.roomType} 第${r.roomNumber}間` : r.roomType;
   if (!r.seatNumber) return "-";
   if (kind === CeremonyKind.PILGRIMAGE) {
     const [row, seat] = r.seatNumber.split("-");
     return `${row}排${seat}號`;
   }
   return r.seatNumber;
+}
+
+/** 進香房型清單：每列是房型名稱、每間最多人數、費用（整間房）與間數，至少要有一種房型 */
+function RoomTypesField() {
+  return (
+    <Form.List
+      name="roomTypes"
+      rules={[
+        {
+          validator: async (_, value) => {
+            if (!value?.length) throw new Error("請至少新增一種房型");
+          },
+        },
+      ]}
+    >
+      {(fields, { add, remove }, { errors }) => (
+        <Form.Item label="房型（報名人數不可超過每間人數，費用為整間房總價）" required>
+          <Space direction="vertical" style={{ width: "100%" }}>
+            {fields.map((field) => (
+              <Space key={field.key} align="baseline" wrap>
+                <Form.Item name={[field.name, "name"]} rules={[{ required: true, whitespace: true, message: "請輸入房型名稱" }]} noStyle>
+                  <Input placeholder="房型，例如：雙人房" style={{ width: 150 }} maxLength={30} />
+                </Form.Item>
+                <Form.Item name={[field.name, "capacity"]} rules={[{ required: true, message: "請輸入每間人數" }]} noStyle>
+                  <InputNumber placeholder="每間人數" min={1} max={45} addonBefore="每間最多" addonAfter="人" style={{ width: 190 }} />
+                </Form.Item>
+                <Form.Item name={[field.name, "fee"]} rules={[{ required: true, message: "請輸入費用" }]} noStyle>
+                  <InputNumber placeholder="費用" min={0} addonBefore="NT$" style={{ width: 150 }} />
+                </Form.Item>
+                <Form.Item name={[field.name, "roomCount"]} rules={[{ required: true, message: "請輸入間數" }]} noStyle>
+                  <InputNumber placeholder="間數" min={1} max={500} addonBefore="共" addonAfter="間" style={{ width: 150 }} />
+                </Form.Item>
+                <Button danger size="small" onClick={() => remove(field.name)}>
+                  刪除
+                </Button>
+              </Space>
+            ))}
+            <Button type="dashed" block onClick={() => add({})}>
+              ＋ 新增房型
+            </Button>
+            <Form.ErrorList errors={errors} />
+          </Space>
+        </Form.Item>
+      )}
+    </Form.List>
+  );
+}
+
+function BusCountField({ min = 1, registered }: { min?: number; registered?: number }) {
+  return (
+    <Form.Item
+      label={`遊覽車台數（每台 ${PILGRIMAGE_BUS_SEAT_COUNT} 座，坐滿就不能再報名${registered != null ? `；目前已報名 ${registered} 人` : ""}）`}
+      name="busCount"
+      rules={[{ required: true, message: "請輸入遊覽車台數" }]}
+    >
+      <InputNumber style={{ width: "100%" }} min={min} max={50} placeholder="例如：2" addonAfter="台" />
+    </Form.Item>
+  );
 }
 
 function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeId: string; kind?: CeremonyKind }) {
@@ -142,6 +201,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
               ? (values.registrationDeadline as Dayjs).format("YYYY-MM-DD")
               : undefined,
             roomTypes: isPilgrimage ? values.roomTypes : undefined,
+            busCount: isPilgrimage ? values.busCount : undefined,
           })
         }
       >
@@ -157,82 +217,25 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
         >
           <DatePicker style={{ width: "100%" }} placeholder="不填則不設限" />
         </Form.Item>
-        {!isPilgrimage && (
+        {isPilgrimage ? (
           <>
-        {!isPilgrimage && (
-          <>
-        <Form.Item label="收費方式" name="feeMode">
-          <Radio.Group>
-            <Radio.Button value={CeremonyFeeMode.FREE_WILL}>隨喜</Radio.Button>
-            <Radio.Button value={CeremonyFeeMode.FIXED_AMOUNT}>固定金額</Radio.Button>
-          </Radio.Group>
-        </Form.Item>
-        {feeMode === CeremonyFeeMode.FIXED_AMOUNT && (
-          <Form.Item label="固定金額" name="fixedAmount" rules={[{ required: true }]}>
-            <InputNumber style={{ width: "100%" }} min={0} />
-          </Form.Item>
-        )}
+            <BusCountField />
+            <RoomTypesField />
           </>
-        )}
-        {isPilgrimage && (
-          <Form.List name="roomTypes">
-            {(fields, { add, remove }) => (
-              <Form.Item label="房型與費用（報名時選房型，登錄人數須等於房型人數，費用為整間房總價）" required>
-                <Space direction="vertical" style={{ width: "100%" }}>
-                  {fields.map((field) => (
-                    <Space key={field.key} align="baseline" wrap>
-                      <Form.Item name={[field.name, "name"]} rules={[{ required: true, message: "請輸入房型名稱" }]} noStyle>
-                        <Input placeholder="房型，例如：雙人房" style={{ width: 150 }} maxLength={30} />
-                      </Form.Item>
-                      <Form.Item name={[field.name, "capacity"]} rules={[{ required: true, message: "請輸入人數" }]} noStyle>
-                        <InputNumber placeholder="人數" min={1} max={45} addonAfter="人" style={{ width: 110 }} />
-                      </Form.Item>
-                      <Form.Item name={[field.name, "fee"]} rules={[{ required: true, message: "請輸入費用" }]} noStyle>
-                        <InputNumber placeholder="費用" min={0} addonBefore="NT$" style={{ width: 150 }} />
-                      </Form.Item>
-                      <Button danger size="small" onClick={() => remove(field.name)}>
-                        刪除
-                      </Button>
-                    </Space>
-                  ))}
-                  <Button type="dashed" block onClick={() => add({})}>
-                    ＋ 新增房型
-                  </Button>
-                </Space>
+        ) : (
+          <>
+            <Form.Item label="收費方式" name="feeMode">
+              <Radio.Group>
+                <Radio.Button value={CeremonyFeeMode.FREE_WILL}>隨喜</Radio.Button>
+                <Radio.Button value={CeremonyFeeMode.FIXED_AMOUNT}>固定金額</Radio.Button>
+              </Radio.Group>
+            </Form.Item>
+            {feeMode === CeremonyFeeMode.FIXED_AMOUNT && (
+              <Form.Item label="固定金額" name="fixedAmount" rules={[{ required: true }]}>
+                <InputNumber style={{ width: "100%" }} min={0} />
               </Form.Item>
             )}
-          </Form.List>
-        )}
           </>
-        )}
-        {isPilgrimage && (
-          <Form.List name="roomTypes">
-            {(fields, { add, remove }) => (
-              <Form.Item label="房型與費用（報名時選房型，登錄人數須等於房型人數，費用為整間房總價）" required>
-                <Space direction="vertical" style={{ width: "100%" }}>
-                  {fields.map((field) => (
-                    <Space key={field.key} align="baseline" wrap>
-                      <Form.Item name={[field.name, "name"]} rules={[{ required: true, message: "請輸入房型名稱" }]} noStyle>
-                        <Input placeholder="房型，例如：雙人房" style={{ width: 150 }} maxLength={30} />
-                      </Form.Item>
-                      <Form.Item name={[field.name, "capacity"]} rules={[{ required: true, message: "請輸入人數" }]} noStyle>
-                        <InputNumber placeholder="人數" min={1} max={45} addonAfter="人" style={{ width: 110 }} />
-                      </Form.Item>
-                      <Form.Item name={[field.name, "fee"]} rules={[{ required: true, message: "請輸入費用" }]} noStyle>
-                        <InputNumber placeholder="費用" min={0} addonBefore="NT$" style={{ width: 150 }} />
-                      </Form.Item>
-                      <Button danger size="small" onClick={() => remove(field.name)}>
-                        刪除
-                      </Button>
-                    </Space>
-                  ))}
-                  <Button type="dashed" block onClick={() => add({})}>
-                    ＋ 新增房型
-                  </Button>
-                </Space>
-              </Form.Item>
-            )}
-          </Form.List>
         )}
         <Form.Item label="說明" name="description">
           <Input.TextArea rows={2} />
@@ -257,7 +260,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
           <Alert
             type="info"
             style={{ marginBottom: 16 }}
-            message={`報名時先選房型，登錄與房型相同人數的參加者，再在遊覽車座位圖上點選座位（共 ${PILGRIMAGE_BUS_SEAT_COUNT} 座），已被選走的座位會變色`}
+            message="報名時選房型並登錄參加者（人數不可超過該房型每間人數），系統依序分配第幾間；房型訂滿或遊覽車坐滿後就不能再報名"
           />
         ) : (
           <Space.Compact block>
@@ -322,14 +325,20 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
           morningCapacity: ceremony.morningCapacity ?? undefined,
           afternoonCapacity: ceremony.afternoonCapacity ?? undefined,
           registrationDeadline: ceremony.registrationDeadline ? dayjs(ceremony.registrationDeadline) : undefined,
-          roomTypes: ceremony.roomTypes ?? undefined,
+          roomTypes: ceremony.roomTypes?.map((r) => ({
+            name: r.name,
+            capacity: r.capacity,
+            fee: r.fee,
+            roomCount: r.roomCount ?? undefined,
+          })),
+          busCount: ceremony.busCount ?? undefined,
         }}
         onFinish={(values) =>
           mutation.mutate({
             name: values.name,
             date: (values.date as Dayjs).format("YYYY-MM-DD"),
             ...(isPilgrimage
-              ? { roomTypes: values.roomTypes }
+              ? { roomTypes: values.roomTypes ?? [], busCount: values.busCount }
               : {
                   feeMode: values.feeMode,
                   fixedAmount: values.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? values.fixedAmount : null,
@@ -358,16 +367,35 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
         >
           <DatePicker style={{ width: "100%" }} placeholder="不填則不設限" />
         </Form.Item>
-        <Form.Item label="收費方式" name="feeMode">
-          <Radio.Group>
-            <Radio.Button value={CeremonyFeeMode.FREE_WILL}>隨喜</Radio.Button>
-            <Radio.Button value={CeremonyFeeMode.FIXED_AMOUNT}>固定金額</Radio.Button>
-          </Radio.Group>
-        </Form.Item>
-        {feeMode === CeremonyFeeMode.FIXED_AMOUNT && (
-          <Form.Item label="固定金額" name="fixedAmount" rules={[{ required: true }]}>
-            <InputNumber style={{ width: "100%" }} min={0} />
-          </Form.Item>
+        {isPilgrimage ? (
+          <>
+            <BusCountField
+              min={Math.max(1, Math.ceil(ceremony.registrationCount / PILGRIMAGE_BUS_SEAT_COUNT))}
+              registered={ceremony.registrationCount}
+            />
+            <RoomTypesField />
+            {hasRegistrations && (
+              <Alert
+                type="warning"
+                style={{ marginBottom: 16 }}
+                message="已有人預訂的房型不能刪除或改名，間數不能少於已訂間數，每間人數不能少於已入住的人數"
+              />
+            )}
+          </>
+        ) : (
+          <>
+            <Form.Item label="收費方式" name="feeMode">
+              <Radio.Group>
+                <Radio.Button value={CeremonyFeeMode.FREE_WILL}>隨喜</Radio.Button>
+                <Radio.Button value={CeremonyFeeMode.FIXED_AMOUNT}>固定金額</Radio.Button>
+              </Radio.Group>
+            </Form.Item>
+            {feeMode === CeremonyFeeMode.FIXED_AMOUNT && (
+              <Form.Item label="固定金額" name="fixedAmount" rules={[{ required: true }]}>
+                <InputNumber style={{ width: "100%" }} min={0} />
+              </Form.Item>
+            )}
+          </>
         )}
         <Form.Item label="說明" name="description">
           <Input.TextArea rows={2} />
@@ -510,12 +538,22 @@ function CeremonyListCard({ templeId }: { templeId: string }) {
                     下午 {record.afternoonRegistered}/{record.afternoonCapacity}
                   </Tag>
                 </Space>
+              ) : record.kind === CeremonyKind.PILGRIMAGE ? (
+                <Space direction="vertical" size={2}>
+                  {record.busCapacity != null && (
+                    <Tag color={record.registrationCount >= record.busCapacity ? "red" : "green"}>
+                      遊覽車 {record.registrationCount}/{record.busCapacity} 人
+                    </Tag>
+                  )}
+                  {record.roomTypes?.map((r) => (
+                    <Tag key={r.name} color={r.roomCount != null && r.roomsBooked >= r.roomCount ? "red" : "blue"}>
+                      {r.name} {r.roomsBooked}/{r.roomCount ?? "不限"} 間
+                    </Tag>
+                  ))}
+                </Space>
               ) : record.totalSeats ? (
                 <Tag color={record.seatsAssigned >= record.totalSeats ? "red" : "green"}>
-                  {record.seatsAssigned}/{record.totalSeats}
-                  {record.kind === CeremonyKind.PILGRIMAGE
-                    ? "（遊覽車）"
-                    : `（${record.tableCount} 桌 × ${record.seatsPerTable} 人）`}
+                  {record.seatsAssigned}/{record.totalSeats}（{record.tableCount} 桌 × {record.seatsPerTable} 人）
                 </Tag>
               ) : (
                 <Typography.Text type="secondary">未設定</Typography.Text>
@@ -646,7 +684,7 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
     exportRowsToExcel(
       `名單_${ceremony.name}.xlsx`,
       "報名名單",
-      ["參加者", "金額", "座位", "報名時間"],
+      ["參加者", "金額", ceremony.kind === CeremonyKind.PILGRIMAGE ? "房間" : "座位", "報名時間"],
       registrations.map((r) => [
         r.participantName || "（未留姓名）",
         r.amount,
@@ -659,21 +697,6 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
   const isPilgrimage = ceremony.kind === CeremonyKind.PILGRIMAGE;
 
   const handleExportSeatChart = () => {
-    if (isPilgrimage) {
-      // 遊覽車座位表：每排一列，由左到右 1～4 號，門的位置沒有座位
-      const rows: (string | number)[][] = Array.from({ length: PILGRIMAGE_BUS_ROWS }, (_, r) => {
-        const row = r + 1;
-        return [
-          `第${row}排`,
-          ...Array.from({ length: PILGRIMAGE_BUS_SEATS_PER_ROW }, (_, c) => {
-            const seat = seats.find((s) => s.tableNumber === row && s.seatInTable === c + 1);
-            return seat ? seat.participantName || "" : "（門）";
-          }),
-        ];
-      });
-      exportRowsToExcel(`座位表_${ceremony.name}.xlsx`, "座位表", ["排", "1號", "2號", "3號", "4號"], rows);
-      return;
-    }
     if (!ceremony.tableCount || !ceremony.seatsPerTable) return;
     const headers = ["桌次", ...Array.from({ length: ceremony.seatsPerTable }, (_, i) => `${i + 1}號`)];
     const rows: (string | number)[][] = Array.from({ length: ceremony.tableCount }, (_, t) => {
@@ -724,10 +747,21 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
               {ceremony.description}
             </Descriptions.Item>
           )}
+          {isPilgrimage && ceremony.busCapacity != null && (
+            <Descriptions.Item label="遊覽車" span={2}>
+              已報名 {ceremony.registrationCount} / {ceremony.busCapacity} 人（{ceremony.busCount} 台 × {PILGRIMAGE_BUS_SEAT_COUNT} 座）
+            </Descriptions.Item>
+          )}
+          {isPilgrimage && !!ceremony.roomTypes?.length && (
+            <Descriptions.Item label="房間" span={2}>
+              {ceremony.roomTypes
+                .map((r) => `${r.name} 已訂 ${r.roomsBooked}/${r.roomCount ?? "不限"} 間`)
+                .join("、")}
+            </Descriptions.Item>
+          )}
           {ceremony.totalSeats != null && (
             <Descriptions.Item label="座位" span={2}>
-              {ceremony.seatsAssigned} / {ceremony.totalSeats}
-              {isPilgrimage ? "（遊覽車）" : `（${ceremony.tableCount} 桌 × ${ceremony.seatsPerTable} 人）`}
+              {ceremony.seatsAssigned} / {ceremony.totalSeats}（{ceremony.tableCount} 桌 × {ceremony.seatsPerTable} 人）
             </Descriptions.Item>
           )}
         </Descriptions>
@@ -750,9 +784,6 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
               </Button>
             }
           >
-            {isPilgrimage ? (
-              <BusSeatMap seats={seats} />
-            ) : (
             <Space direction="vertical" style={{ width: "100%" }} size="middle">
               {Array.from(new Set(seats.map((s) => s.tableNumber))).map((tableNumber) => (
                 <div key={tableNumber}>
@@ -778,7 +809,6 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
                 </div>
               ))}
             </Space>
-            )}
           </Card>
         )}
 
@@ -801,7 +831,7 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
               { title: "參加者", dataIndex: "participantName", render: (v: string) => v || "（未留姓名）" },
               { title: "金額", dataIndex: "amount", render: (v: number) => `NT$ ${v.toLocaleString()}` },
               {
-                title: ceremony.kind === CeremonyKind.JIGAI ? "場次號碼" : "座位",
+                title: ceremony.kind === CeremonyKind.JIGAI ? "場次號碼" : isPilgrimage ? "房間" : "座位",
                 render: (_: unknown, r: CeremonyRegistrationDto) => registrationSeatText(r, ceremony.kind),
               },
               {

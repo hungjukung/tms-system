@@ -15,6 +15,11 @@ export class RoomTypeDto {
   @IsNumber()
   @Min(0)
   fee: number;
+
+  @IsInt()
+  @IsPositive()
+  @Max(500)
+  roomCount: number;
 }
 
 
@@ -73,4 +78,11 @@ export class CreateCeremonyDto {
   @ValidateNested({ each: true })
   @Type(() => RoomTypeDto)
   roomTypes?: RoomTypeDto[];
+
+  /** 進香遊覽車台數 */
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  @Max(50)
+  busCount?: number;
 }

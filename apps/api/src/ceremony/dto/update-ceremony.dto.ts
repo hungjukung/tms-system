@@ -1,6 +1,6 @@
 import { CeremonyFeeMode } from "@tms/shared";
 import { Type } from "class-transformer";
-import { IsArray, IsDateString, IsEnum, IsInt, IsNumber, IsOptional, IsPositive, IsString, Min, ValidateNested } from "class-validator";
+import { IsArray, IsDateString, IsEnum, IsInt, IsNumber, IsOptional, IsPositive, IsString, Max, Min, ValidateNested } from "class-validator";
 import { RoomTypeDto } from "./create-ceremony.dto";
 
 export class UpdateCeremonyDto {
@@ -54,4 +54,10 @@ export class UpdateCeremonyDto {
   @ValidateNested({ each: true })
   @Type(() => RoomTypeDto)
   roomTypes?: RoomTypeDto[] | null;
+
+  @IsOptional()
+  @IsInt()
+  @IsPositive()
+  @Max(50)
+  busCount?: number;
 }

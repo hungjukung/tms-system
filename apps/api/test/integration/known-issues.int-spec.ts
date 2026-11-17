@@ -278,6 +278,7 @@ describe("先前發現問題的回歸測試與伺服器端把關", () => {
     describe("報名期限", () => {
       it("活動日期已過、沒設報名期限：所有報名方式都 400", async () => {
         const c = await create({ date: day(-1), tableCount: 1, seatsPerTable: 2 });
+        const bus = await create({ date: day(-1), kind: "PILGRIMAGE", busCount: 1, roomTypes: [{ name: "雙人房", capacity: 2, fee: 0, roomCount: 5 }] });
         const m = (await volunteer.post("/members", { householdAddress: "A", name: "王小明", gender: "MALE" }).expect(201)).body;
         const base = { ceremonyId: c.id, amount: 0 };
         const attempts = [
@@ -285,7 +286,7 @@ describe("先前發現問題的回歸測試與伺服器端把關", () => {
           submit({ ...base, walkInName: "甲", seatIndex: 1 }),
           submit({ ...base, householdId: m.householdId }),
           submit({ ...base, walkInName: "甲", tableNumber: 1 }),
-          submit({ ...base, walkInName: "甲", seatIndexes: [1] }),
+          submit({ ceremonyId: bus.id, amount: 0, walkInName: "甲", roomType: "雙人房" }),
         ];
         for (const res of await Promise.all(attempts)) {
           expect(res.status).toBe(400);
@@ -332,10 +333,22 @@ describe("先前發現問題的回歸測試與伺服器端把關", () => {
         await submit({ ceremonyId: c.id, walkInName: "甲", tableNumber: 1, amount: 300 }).expect(201);
       });
 
-      it("進香：單價 × 座位數；祭改：單價 × 1", async () => {
-        const bus = await create({ kind: "PILGRIMAGE", feeMode: "FIXED_AMOUNT", fixedAmount: 800 });
-        await submit({ ceremonyId: bus.id, walkInName: "甲", seatIndexes: [1, 2], amount: 800 }).expect(400);
-        await submit({ ceremonyId: bus.id, walkInName: "甲", seatIndexes: [1, 2], amount: 1600 }).expect(201);
+      it("進香：收房型費用（不論住幾人）；祭改：單價 × 1", async () => {
+        const bus = await create({
+          kind: "PILGRIMAGE",
+          busCount: 1,
+          roomTypes: [{ name: "雙人房", capacity: 2, fee: 3000, roomCount: 5 }],
+        });
+        await submit({ ceremonyId: bus.id, walkInName: "甲", roomType: "雙人房", amount: 1600 }).expect(400);
+        await submit({ ceremonyId: bus.id, walkInName: "甲", roomType: "雙人房", amount: 3000 }).expect(201);
+        await submit({
+          ceremonyId: bus.id,
+          walkInName: "乙",
+          roomType: "雙人房",
+          amount: 3000,
+          passengerMemberIds: ["", ""],
+          passengerNames: ["", "丙"],
+        }).expect(201);
 
         const jigai = await create({ kind: "JIGAI", feeMode: "FIXED_AMOUNT", fixedAmount: 300, morningCapacity: 5, afternoonCapacity: 5 });
         await submit({ ceremonyId: jigai.id, walkInName: "甲", session: "AM", amount: 1 }).expect(400);
@@ -379,10 +392,17 @@ describe("先前發現問題的回歸測試與伺服器端把關", () => {
       });
 
       it("臨櫃姓名：活動報名、點燈認領、捐款、送禮、同行乘客都有上限", async () => {
-        const c = await create({ kind: "PILGRIMAGE" });
+        const c = await create({ kind: "PILGRIMAGE", busCount: 1, roomTypes: [{ name: "雙人房", capacity: 2, fee: 0, roomCount: 5 }] });
         await volunteer.post("/ceremony/registrations", { ceremonyId: c.id, walkInName: name(51), amount: 0 }).expect(400);
-        await submit({ ceremonyId: c.id, walkInName: "甲", seatIndexes: [1, 2], amount: 0, passengerNames: ["", name(51)] }).expect(400);
-        await submit({ ceremonyId: c.id, walkInName: name(50), seatIndexes: [1], amount: 0 }).expect(201);
+        await submit({
+          ceremonyId: c.id,
+          walkInName: "甲",
+          roomType: "雙人房",
+          amount: 0,
+          passengerMemberIds: ["", ""],
+          passengerNames: ["", name(51)],
+        }).expect(400);
+        await submit({ ceremonyId: c.id, walkInName: name(50), roomType: "雙人房", amount: 0 }).expect(201);
         await volunteer.post("/lantern/claims", { slotId: GHOST_ID, lanternType: "光明燈", walkInName: name(51), amount: 1 }).expect(400);
         await volunteer.post("/lantern/donations", { templeId: fx.templeId, walkInName: name(51), type: DonationType.GENERAL, amount: 1 }).expect(400);
         await volunteer

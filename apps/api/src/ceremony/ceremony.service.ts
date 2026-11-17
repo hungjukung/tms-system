@@ -14,13 +14,10 @@ import {
   LedgerEntryStatus,
   LedgerEntryType,
   MemberHistoryEntryDto,
-  PILGRIMAGE_BUS_ROWS,
   PilgrimageRoomType,
   PILGRIMAGE_BUS_SEAT_COUNT,
-  PILGRIMAGE_BUS_SEATS_PER_ROW,
   ReceiptDto,
   ReceiptSourceType,
-  isPilgrimageBusSeat,
 } from "@tms/shared";
 import { HouseholdService } from "../household/household.service";
 import { LanternService } from "../lantern/lantern.service";
@@ -28,6 +25,7 @@ import { User } from "../auth/entities/user.entity";
 import { LedgerEntry } from "../finance/entities/ledger-entry.entity";
 import { Temple } from "../settings/entities/temple.entity";
 import { Ceremony } from "./entities/ceremony.entity";
+import { EntityManager } from "typeorm";
 import { CeremonyRegistration } from "./entities/ceremony-registration.entity";
 import { CreateCeremonyDto } from "./dto/create-ceremony.dto";
 import { UpdateCeremonyDto } from "./dto/update-ceremony.dto";
@@ -60,8 +58,15 @@ export class CeremonyService {
     if (isJigai && (!dto.morningCapacity || !dto.afternoonCapacity)) {
       throw new BadRequestException("祭改活動請設定上午場與下午場人數");
     }
-    // 祭改用場次人數、進香用固定的遊覽車座位圖，兩者都不使用桌次座位
-    const usesTables = !isJigai && dto.kind !== CeremonyKind.PILGRIMAGE;
+    const isPilgrimage = dto.kind === CeremonyKind.PILGRIMAGE;
+    if (isPilgrimage && !dto.busCount) {
+      throw new BadRequestException("進香活動請設定遊覽車台數");
+    }
+    if (isPilgrimage && !dto.roomTypes?.length) {
+      throw new BadRequestException("進香活動請至少設定一種房型");
+    }
+    // 祭改用場次人數、進香用房型與遊覽車台數，兩者都不使用桌次座位
+    const usesTables = !isJigai && !isPilgrimage;
     const ceremony = this.ceremonyRepo.create({
       kind: dto.kind ?? CeremonyKind.GENERAL,
       morningCapacity: isJigai ? (dto.morningCapacity ?? null) : null,
@@ -75,7 +80,8 @@ export class CeremonyService {
       tableCount: usesTables ? (dto.tableCount ?? null) : null,
       seatsPerTable: usesTables ? (dto.seatsPerTable ?? null) : null,
       registrationDeadline: dto.registrationDeadline ?? null,
-      roomTypes: dto.kind === CeremonyKind.PILGRIMAGE ? this.normalizeRoomTypes(dto.roomTypes) : null,
+      roomTypes: isPilgrimage ? this.normalizeRoomTypes(dto.roomTypes) : null,
+      busCount: isPilgrimage ? (dto.busCount ?? null) : null,
     });
     const saved = await this.ceremonyRepo.save(ceremony);
     return this.toCeremonyDto(saved, { registrationCount: 0, totalAmount: 0 });
@@ -136,8 +142,21 @@ export class CeremonyService {
       if (dto.seatsPerTable !== undefined) ceremony.seatsPerTable = dto.seatsPerTable;
     }
     if (dto.registrationDeadline !== undefined) ceremony.registrationDeadline = dto.registrationDeadline;
-    if (dto.roomTypes !== undefined && ceremony.kind === CeremonyKind.PILGRIMAGE) {
-      ceremony.roomTypes = this.normalizeRoomTypes(dto.roomTypes ?? undefined);
+    if (ceremony.kind === CeremonyKind.PILGRIMAGE) {
+      if (dto.busCount != null) {
+        const registered = await this.registrationRepo.count({ where: { ceremonyId: id } });
+        if (dto.busCount * PILGRIMAGE_BUS_SEAT_COUNT < registered) {
+          throw new BadRequestException(
+            `已有 ${registered} 人報名，遊覽車至少需要 ${Math.ceil(registered / PILGRIMAGE_BUS_SEAT_COUNT)} 台`,
+          );
+        }
+        ceremony.busCount = dto.busCount;
+      }
+      if (dto.roomTypes !== undefined) {
+        const next = this.normalizeRoomTypes(dto.roomTypes ?? undefined);
+        await this.assertRoomTypesCoverBookings(id, next);
+        ceremony.roomTypes = next;
+      }
     }
 
     const saved = await this.ceremonyRepo.save(ceremony);
@@ -163,7 +182,9 @@ export class CeremonyService {
     seatsAssigned: number;
     morningRegistered: number;
     afternoonRegistered: number;
+    roomsBooked: Map<string, number>;
   }> {
+    const roomsBooked = (await this.getRoomsBookedByCeremony([ceremonyId])).get(ceremonyId) ?? new Map();
     const row = await this.registrationRepo
       .createQueryBuilder("r")
       .select("COUNT(*)", "count")
@@ -180,7 +201,72 @@ export class CeremonyService {
       registrationCount: Number(row?.count ?? 0),
       totalAmount: Number(row?.total ?? 0),
       seatsAssigned: Number(row?.seatsAssigned ?? 0),
+      roomsBooked,
     };
+  }
+
+  /** 各活動每個房型已訂幾間（同一間房的參加者第幾間相同，所以算不重複的第幾間） */
+  private async getRoomsBookedByCeremony(ceremonyIds: string[]): Promise<Map<string, Map<string, number>>> {
+    const result = new Map<string, Map<string, number>>();
+    if (ceremonyIds.length === 0) return result;
+    const rows = await this.registrationRepo
+      .createQueryBuilder("r")
+      .select('r."ceremonyId"', "ceremonyId")
+      .addSelect('r."roomType"', "roomType")
+      .addSelect('COUNT(DISTINCT r."roomNumber")', "rooms")
+      .where('r."ceremonyId" IN (:...ceremonyIds)', { ceremonyIds })
+      .andWhere('r."roomType" IS NOT NULL')
+      .groupBy('r."ceremonyId"')
+      .addGroupBy('r."roomType"')
+      .getRawMany<{ ceremonyId: string; roomType: string; rooms: string }>();
+    for (const row of rows) {
+      if (!result.has(row.ceremonyId)) result.set(row.ceremonyId, new Map());
+      result.get(row.ceremonyId)!.set(row.roomType, Number(row.rooms));
+    }
+    return result;
+  }
+
+  /** 單一活動每個房型的使用狀況：已用的第幾間、單間最多住幾人（編輯房型與配房號時使用） */
+  private async getRoomUsage(
+    ceremonyId: string,
+    manager: EntityManager = this.registrationRepo.manager,
+  ): Promise<Map<string, { roomNumbers: Set<number>; maxOccupants: number }>> {
+    const rows = await manager
+      .createQueryBuilder(CeremonyRegistration, "r")
+      .select('r."roomType"', "roomType")
+      .addSelect('r."roomNumber"', "roomNumber")
+      .addSelect("COUNT(*)", "occupants")
+      .where('r."ceremonyId" = :ceremonyId', { ceremonyId })
+      .andWhere('r."roomType" IS NOT NULL')
+      .groupBy('r."roomType"')
+      .addGroupBy('r."roomNumber"')
+      .getRawMany<{ roomType: string; roomNumber: number | null; occupants: string }>();
+    const usage = new Map<string, { roomNumbers: Set<number>; maxOccupants: number }>();
+    for (const row of rows) {
+      const entry = usage.get(row.roomType) ?? { roomNumbers: new Set<number>(), maxOccupants: 0 };
+      if (row.roomNumber != null) entry.roomNumbers.add(Number(row.roomNumber));
+      entry.maxOccupants = Math.max(entry.maxOccupants, Number(row.occupants));
+      usage.set(row.roomType, entry);
+    }
+    return usage;
+  }
+
+  /**
+   * 編輯房型時不能讓已預訂的房間失效：已有人訂的房型不能刪除或改名，
+   * 間數不能少於已訂間數，每間人數不能少於已訂房間中住最多人的那間。
+   */
+  private async assertRoomTypesCoverBookings(ceremonyId: string, next: PilgrimageRoomType[] | null): Promise<void> {
+    const usage = await this.getRoomUsage(ceremonyId);
+    for (const [name, used] of usage) {
+      const room = next?.find((r) => r.name === name);
+      if (!room) throw new BadRequestException(`「${name}」已有人預訂，不能刪除或改名`);
+      if (room.roomCount != null && room.roomCount < used.roomNumbers.size) {
+        throw new BadRequestException(`「${name}」已訂 ${used.roomNumbers.size} 間，間數不可少於此數`);
+      }
+      if (room.capacity < used.maxOccupants) {
+        throw new BadRequestException(`「${name}」已有一間住 ${used.maxOccupants} 人，每間人數不可少於此數`);
+      }
+    }
   }
 
   /**
@@ -245,19 +331,14 @@ export class CeremonyService {
     }
 
     this.assertHasParticipantName(dto);
-    if (ceremony.kind === CeremonyKind.PILGRIMAGE && ceremony.roomTypes?.length) {
-      throw new BadRequestException("此進香活動需選擇房型，請使用多人報名並依房型人數選位");
+    if (ceremony.kind === CeremonyKind.PILGRIMAGE) {
+      throw new BadRequestException("進香請在活動報名頁登錄參加者並選擇房型後送出");
     }
     this.assertAmountMatchesFixedFee(ceremony, dto.amount, 1);
 
     if (ceremony.kind === CeremonyKind.JIGAI) {
       return this.createJigaiRegistrationRecord(dto, ceremony, userId);
     }
-    // 進香座位一律由報名者在遊覽車座位圖上自行點選，不自動配位
-    if (ceremony.kind === CeremonyKind.PILGRIMAGE && dto.seatIndex == null) {
-      throw new BadRequestException("請選擇遊覽車座位");
-    }
-
     const totalSeats = this.totalSeatsOf(ceremony);
 
     const buildRegistration = () =>
@@ -376,9 +457,16 @@ export class CeremonyService {
   }
 
   /** 整理並檢查房型清單：名稱不可空白或重複；沒有任何房型時回傳 null（沿用原本的一般收費方式） */
-  private normalizeRoomTypes(roomTypes?: { name: string; capacity: number; fee: number }[]): PilgrimageRoomType[] | null {
+  private normalizeRoomTypes(
+    roomTypes?: { name: string; capacity: number; fee: number; roomCount?: number | null }[],
+  ): PilgrimageRoomType[] | null {
     if (!roomTypes?.length) return null;
-    const cleaned = roomTypes.map((r) => ({ name: r.name.trim(), capacity: r.capacity, fee: r.fee }));
+    const cleaned = roomTypes.map((r) => ({
+      name: r.name.trim(),
+      capacity: r.capacity,
+      fee: r.fee,
+      roomCount: r.roomCount ?? null,
+    }));
     if (cleaned.some((r) => !r.name)) throw new BadRequestException("房型名稱不可空白");
     if (new Set(cleaned.map((r) => r.name)).size !== cleaned.length) {
       throw new BadRequestException("房型名稱不可重複");
@@ -387,20 +475,28 @@ export class CeremonyService {
   }
 
   /**
-   * 進香有設定房型時：必須選擇房型，座位數（＝報名人數）要剛好等於該房型人數，
-   * 收費為該房型的固定費用（整間房總價）。回傳所選房型；活動沒設定房型時回傳 null。
+   * 進香有設定房型時：必須選擇房型，參加人數 1 人到該房型每間人數上限都可以（例如雙人房可以只住 1 人），
+   * 收費為該房型的費用（整間房總價）。回傳所選房型；活動沒設定房型時回傳 null。
    */
-  private assertRoomTypeSelection(ceremony: Ceremony, dto: RegisterCeremonyDto, headcount: number): PilgrimageRoomType | null {
-    if (ceremony.kind !== CeremonyKind.PILGRIMAGE || !ceremony.roomTypes?.length) return null;
+  private resolveRoomType(ceremony: Ceremony, dto: RegisterCeremonyDto, headcount: number): PilgrimageRoomType | null {
+    if (!ceremony.roomTypes?.length) return null;
     const room = ceremony.roomTypes.find((r) => r.name === dto.roomType);
     if (!room) throw new BadRequestException("請選擇房型");
-    if (headcount !== room.capacity) {
-      throw new BadRequestException(`${room.name}需登錄 ${room.capacity} 位參加者並選 ${room.capacity} 個座位，目前為 ${headcount} 位`);
+    if (headcount > room.capacity) {
+      throw new BadRequestException(`${room.name}每間最多 ${room.capacity} 人，目前登錄 ${headcount} 人`);
     }
     if (Math.round(dto.amount * 100) !== Math.round(room.fee * 100)) {
       throw new BadRequestException(`${room.name}費用為 NT$ ${room.fee}`);
     }
-    return room;
+    return { ...room, roomCount: room.roomCount ?? null };
+  }
+
+  /** 取該房型最小的空房號（從第 1 間起）；房間數有上限且已訂滿時回傳 null */
+  private pickRoomNumber(used: Set<number>, roomCount: number | null): number | null {
+    for (let n = 1; roomCount == null || n <= roomCount; n++) {
+      if (!used.has(n)) return n;
+    }
+    return null;
   }
 
   /** 報名至少要知道是誰：必須選一位信徒，或填寫姓名（只有空白不算） */
@@ -410,127 +506,141 @@ export class CeremonyService {
     }
   }
 
-  /** 活動的座位總數：一般活動為桌數 × 每桌人數，進香為遊覽車固定座位數；未設定座位時為 null */
+  /** 活動的座位總數：一般活動為桌數 × 每桌人數；祭改、進香不選座位，未設定座位時也是 null */
   private totalSeatsOf(ceremony: Ceremony): number | null {
-    if (ceremony.kind === CeremonyKind.PILGRIMAGE) return PILGRIMAGE_BUS_SEAT_COUNT;
-    if (ceremony.kind === CeremonyKind.JIGAI) return null;
+    if (ceremony.kind !== CeremonyKind.GENERAL) return null;
     return ceremony.tableCount && ceremony.seatsPerTable ? ceremony.tableCount * ceremony.seatsPerTable : null;
   }
 
-  /** 座位流水號換算「第幾桌／排」時，每桌人數（進香為每排 4 座） */
+  /** 座位流水號換算「第幾桌」時，每桌人數 */
   private seatsPerGroupOf(ceremony: Ceremony): number {
-    return ceremony.kind === CeremonyKind.PILGRIMAGE ? PILGRIMAGE_BUS_SEATS_PER_ROW : (ceremony.seatsPerTable ?? 0);
+    return ceremony.seatsPerTable ?? 0;
   }
 
   private isValidSeat(ceremony: Ceremony, seatIndex: number): boolean {
-    if (ceremony.kind === CeremonyKind.PILGRIMAGE) return isPilgrimageBusSeat(seatIndex);
     const totalSeats = this.totalSeatsOf(ceremony);
     return !!totalSeats && Number.isInteger(seatIndex) && seatIndex >= 1 && seatIndex <= totalSeats;
   }
 
-  /** 存進資料庫的座位號碼：一般活動 "桌-位"，進香 "排-號"（換算方式相同，只是每排固定 4 座） */
+  /** 存進資料庫的座位號碼："桌-位" */
   private seatNumberOf(ceremony: Ceremony, seatIndex: number): string {
     return this.formatSeatNumber(seatIndex, this.seatsPerGroupOf(ceremony));
   }
 
-  /** 不帶「座位：」前綴的座位文字：一般活動「1桌8號」，進香「3排2號」 */
+  /** 不帶「座位：」前綴的座位文字，例如「1桌8號」 */
   private seatOnlyLabel(ceremony: Ceremony, seatIndex: number): string {
     const [group, seat] = this.seatNumberOf(ceremony, seatIndex).split("-");
-    return ceremony.kind === CeremonyKind.PILGRIMAGE ? `${group}排${seat}號` : `${group}桌${seat}號`;
+    return `${group}桌${seat}號`;
   }
 
   /**
-   * 進香多人報名：同一位報名者一次在遊覽車座位圖上選好幾個座位，每個座位各建立一筆報名紀錄。
-   * 第一個座位是報名者本人並掛上全部金額；其餘座位是同行乘客，可以各自登錄成已建檔信徒（記在該信徒名下），
-   * 或填臨櫃姓名（未填就沿用報名者姓名），金額為 0，不會重複計入財務報表。
-   * 同一位信徒不能在同一筆報名裡出現兩次。全部座位包在同一個交易內，任一座位被搶先選走就整批回滾。
+   * 進香報名：一次登錄 1 位以上參加者（第 1 位是收據上的報名者），每位參加者各建立一筆報名紀錄，
+   * 第 1 位掛上全部金額，其餘金額為 0，不會重複計入財務報表；同行參加者可以是已建檔信徒（記在該信徒名下）
+   * 或臨櫃姓名（未填就沿用報名者姓名）。不選遊覽車座位。
+   * 有設定房型時：人數 1 人到房型上限都可以，金額為房型費用，自動配給該房型最小的空房號（第幾間），
+   * 房型訂滿就不能報名；總人數不能超過遊覽車可載人數。先鎖住活動那一列再計算剩餘房間與座位，
+   * 多個櫃台同時報名也不會超訂。
    */
-  private async createMultiSeatRegistrationForCombined(
+  private async createPilgrimageRegistrationForCombined(
     dto: RegisterCeremonyDto,
+    ceremony: Ceremony,
     userId: string,
   ): Promise<{
     registrations: CeremonyRegistrationDto[];
     payerName: string;
     description: string;
-    note: string;
+    note?: string;
     templeId: string;
   }> {
-    const ceremony = await this.ceremonyRepo.findOne({ where: { id: dto.ceremonyId } });
-    if (!ceremony) throw new NotFoundException("找不到活動");
     this.assertRegistrationOpen(ceremony);
-    const seatIndexes = dto.seatIndexes ?? [];
-    if (seatIndexes.length === 0) throw new BadRequestException("請選擇座位");
-    if (new Set(seatIndexes).size !== seatIndexes.length) throw new BadRequestException("座位重複，請重新選擇");
-    if (!this.totalSeatsOf(ceremony)) throw new BadRequestException("此活動未設定座位");
-    for (const seatIndex of seatIndexes) {
-      if (!this.isValidSeat(ceremony, seatIndex)) throw new BadRequestException("座位超出範圍");
-    }
     this.assertHasParticipantName(dto);
-    const room = this.assertRoomTypeSelection(ceremony, dto, seatIndexes.length);
-    if (!room) this.assertAmountMatchesFixedFee(ceremony, dto.amount, seatIndexes.length);
-    // 每個座位對應的信徒 id：第一個座位是報名者本人，其餘是同行乘客（空字串代表臨櫃、沒有對應信徒）
-    const seatMemberIds = seatIndexes.map((_, i) =>
+    const headcount = Math.max(1, dto.passengerMemberIds?.length ?? 0, dto.passengerNames?.length ?? 0);
+    const room = this.resolveRoomType(ceremony, dto, headcount);
+    if (!room) this.assertAmountMatchesFixedFee(ceremony, dto.amount, headcount);
+
+    // 每位參加者對應的信徒 id：第 1 位是報名者本人，其餘是同行參加者（空字串代表臨櫃、沒有對應信徒）
+    const participantMemberIds = Array.from({ length: headcount }, (_, i) =>
       i === 0 ? (dto.memberId ?? "") : (dto.passengerMemberIds?.[i] ?? "").trim(),
     );
-    const usedMemberIds = seatMemberIds.filter((id) => !!id);
+    const usedMemberIds = participantMemberIds.filter((id) => !!id);
     if (usedMemberIds.some((id) => !isUUID(id))) throw new BadRequestException("信徒資料錯誤，請重新選擇");
     if (new Set(usedMemberIds).size !== usedMemberIds.length) {
-      throw new BadRequestException("同一位信徒不能重複報名，請檢查同行乘客");
+      throw new BadRequestException("同一位信徒不能重複報名，請檢查參加者名單");
     }
     const memberById = await this.householdService.findMembersByIds([...new Set(usedMemberIds)]);
     if (usedMemberIds.some((id) => !memberById.has(id))) throw new NotFoundException("找不到信徒");
 
     const payerName = dto.memberId ? (memberById.get(dto.memberId)?.name ?? "") : (dto.walkInName ?? "");
-    const passengerNames = seatIndexes.map((_, i) =>
+    const participantNames = participantMemberIds.map((memberId, i) =>
       i === 0
         ? payerName
-        : seatMemberIds[i]
-          ? (memberById.get(seatMemberIds[i])?.name ?? "")
+        : memberId
+          ? (memberById.get(memberId)?.name ?? "")
           : dto.passengerNames?.[i]?.trim() || payerName,
     );
 
-    let saved: CeremonyRegistration[];
-    try {
-      saved = await this.registrationRepo.manager.transaction(async (manager) => {
-        const rows: CeremonyRegistration[] = [];
-        for (let i = 0; i < seatIndexes.length; i++) {
-          const isMain = i === 0;
-          rows.push(
-            await manager.save(
-              manager.create(CeremonyRegistration, {
-                ceremonyId: dto.ceremonyId,
-                memberId: seatMemberIds[i] || null,
-                walkInName: isMain ? (dto.walkInName ?? null) : seatMemberIds[i] ? null : passengerNames[i] || null,
-                walkInAddress: isMain ? (dto.walkInAddress ?? null) : null,
-                amount: isMain ? dto.amount.toFixed(2) : "0.00",
-                wishText: isMain ? (dto.wishText ?? null) : null,
-                seatIndex: seatIndexes[i],
-                seatNumber: this.seatNumberOf(ceremony, seatIndexes[i]),
-                createdByUserId: userId,
-              }),
-            ),
+    const saved = await this.registrationRepo.manager.transaction(async (manager) => {
+      // 鎖住活動，同一個進香活動的報名一筆一筆處理，剩餘房間與座位才不會被同時搶超過
+      const locked = await manager.findOne(Ceremony, {
+        where: { id: ceremony.id },
+        lock: { mode: "pessimistic_write" },
+      });
+      if (!locked) throw new NotFoundException("找不到活動");
+      if (locked.busCount) {
+        const capacity = locked.busCount * PILGRIMAGE_BUS_SEAT_COUNT;
+        const registered = await manager.count(CeremonyRegistration, { where: { ceremonyId: ceremony.id } });
+        if (registered + headcount > capacity) {
+          throw new ConflictException(
+            `遊覽車座位不足：${locked.busCount} 台共 ${capacity} 位，已報名 ${registered} 位，剩 ${Math.max(capacity - registered, 0)} 位`,
           );
         }
-        return rows;
-      });
-    } catch (err) {
-      if (err instanceof QueryFailedError && (err as any).code === PG_UNIQUE_VIOLATION) {
-        throw new ConflictException("其中有座位已被選走，請重新選擇");
       }
-      throw err;
-    }
+      let roomNumber: number | null = null;
+      if (room) {
+        const used = (await this.getRoomUsage(ceremony.id, manager)).get(room.name)?.roomNumbers ?? new Set<number>();
+        roomNumber = this.pickRoomNumber(used, room.roomCount);
+        if (roomNumber == null) throw new ConflictException(`${room.name}已訂滿（共 ${room.roomCount} 間）`);
+      }
+      const rows: CeremonyRegistration[] = [];
+      for (let i = 0; i < headcount; i++) {
+        const isMain = i === 0;
+        rows.push(
+          await manager.save(
+            manager.create(CeremonyRegistration, {
+              ceremonyId: dto.ceremonyId,
+              memberId: participantMemberIds[i] || null,
+              walkInName: isMain
+                ? (dto.walkInName ?? null)
+                : participantMemberIds[i]
+                  ? null
+                  : participantNames[i] || null,
+              walkInAddress: isMain ? (dto.walkInAddress ?? null) : null,
+              amount: isMain ? dto.amount.toFixed(2) : "0.00",
+              wishText: isMain ? (dto.wishText ?? null) : null,
+              roomType: room?.name ?? null,
+              roomNumber,
+              createdByUserId: userId,
+            }),
+          ),
+        );
+      }
+      return rows;
+    });
 
     const registrations = await Promise.all(saved.map((r) => this.toRegistrationDto(r, ceremony)));
-    const headcount = seatIndexes.length;
+    const namesText = participantNames.join("、");
     return {
       registrations,
       payerName,
       description: headcount > 1 ? `${ceremony.name}*${headcount}人` : ceremony.name,
-      note:
-        (room ? `${room.name}，` : "") +
-        (headcount > 1
-          ? `座位｜${seatIndexes.map((s, i) => `${this.seatOnlyLabel(ceremony, s)} ${passengerNames[i]}`.trim()).join("、")}`
-          : `座位：${this.seatOnlyLabel(ceremony, seatIndexes[0])}`),
+      // 收據左邊：有房型印「雙人房｜甲、乙」（只有 1 人就只印房型），沒房型的多人報名印「參加者｜甲、乙」
+      note: room
+        ? headcount > 1
+          ? `${room.name}｜${namesText}`
+          : room.name
+        : headcount > 1
+          ? `參加者｜${namesText}`
+          : undefined,
       templeId: ceremony.templeId,
     };
   }
@@ -539,8 +649,7 @@ export class CeremonyService {
   async getSeatMap(ceremonyId: string): Promise<CeremonySeatDto[]> {
     const ceremony = await this.ceremonyRepo.findOne({ where: { id: ceremonyId } });
     if (!ceremony) throw new NotFoundException("找不到活動");
-    const isPilgrimage = ceremony.kind === CeremonyKind.PILGRIMAGE;
-    if (!isPilgrimage && (!ceremony.tableCount || !ceremony.seatsPerTable)) return [];
+    if (ceremony.kind !== CeremonyKind.GENERAL || !ceremony.tableCount || !ceremony.seatsPerTable) return [];
 
     const allRegistrations = await this.registrationRepo.find({ where: { ceremonyId } });
     // 排除收據已作廢的報名紀錄，不讓已取消的報名繼續佔用座位（跟「報名名單」的排除邏輯一致）
@@ -556,14 +665,10 @@ export class CeremonyService {
     const memberIds = registrations.map((r) => r.memberId).filter((id): id is string => !!id);
     const memberById = await this.householdService.findMembersByIds([...new Set(memberIds)]);
 
-    // 進香：tableNumber 代表第幾排、seatInTable 代表該排由左到右第幾號，門的位置沒有座位，直接略過
     const seatsPerGroup = this.seatsPerGroupOf(ceremony);
-    const maxSeatIndex = isPilgrimage
-      ? PILGRIMAGE_BUS_ROWS * PILGRIMAGE_BUS_SEATS_PER_ROW
-      : (ceremony.tableCount as number) * seatsPerGroup;
+    const maxSeatIndex = ceremony.tableCount * seatsPerGroup;
     const seats: CeremonySeatDto[] = [];
     for (let seatIndex = 1; seatIndex <= maxSeatIndex; seatIndex++) {
-      if (isPilgrimage && !isPilgrimageBusSeat(seatIndex)) continue;
       const tableNumber = Math.floor((seatIndex - 1) / seatsPerGroup) + 1;
       const seatInTable = ((seatIndex - 1) % seatsPerGroup) + 1;
       const registration = registrationBySeat.get(seatIndex);
@@ -622,16 +727,21 @@ export class CeremonyService {
     note?: string;
     templeId: string;
   }> {
+    const ceremony = await this.ceremonyRepo.findOne({ where: { id: dto.ceremonyId } });
+    if (!ceremony) throw new NotFoundException("找不到活動");
+    if (ceremony.kind === CeremonyKind.PILGRIMAGE) {
+      if (dto.householdId || dto.tableNumber != null) {
+        throw new BadRequestException("進香請逐一登錄參加者，不能整戶或認領整桌報名");
+      }
+      return this.createPilgrimageRegistrationForCombined(dto, ceremony, userId);
+    }
     if (dto.householdId) {
       return this.createHouseholdRegistrationForCombined(dto, userId);
-    }
-    if (dto.seatIndexes?.length) {
-      return this.createMultiSeatRegistrationForCombined(dto, userId);
     }
     if (dto.tableNumber != null) {
       return this.createTableRegistrationForCombined(dto, userId);
     }
-    const { registration: saved, ceremony } = await this.createRegistrationRecord(dto, userId);
+    const { registration: saved } = await this.createRegistrationRecord(dto, userId);
     const registrationDto = await this.toRegistrationDto(saved, ceremony);
     const { payerName, description, note } = await this.describeRegistration(saved.id);
     return { registration: registrationDto, payerName, description, note, templeId: ceremony.templeId };
@@ -671,9 +781,6 @@ export class CeremonyService {
     }
 
     const seatIndexes = dto.householdSeatIndexes;
-    if (!seatIndexes && ceremony.kind === CeremonyKind.PILGRIMAGE) {
-      throw new BadRequestException("請選擇遊覽車座位");
-    }
     if (seatIndexes) {
       if (seatIndexes.length !== headcount) {
         throw new BadRequestException("選位數量與戶籍人數不符，請重新選位");
@@ -933,7 +1040,9 @@ export class CeremonyService {
       // 祭改的場次號碼前面加上姓名（收據左邊印「姓名，上午場 4號」），一眼看出是誰的號碼
       note: registration.queueNumber
         ? [payerName, this.formatQueueLabel(registration.session, registration.queueNumber)].filter(Boolean).join("，")
-        : registration.seatNumber
+        : registration.roomType
+          ? registration.roomType
+          : registration.seatNumber
           ? this.formatSeatLabel(registration.seatNumber, ceremony?.kind)
           : undefined,
     };
@@ -999,9 +1108,15 @@ export class CeremonyService {
     const expenseTotal = expenses.reduce((sum, e) => sum + e.amount, 0);
 
     const seatsAssigned = registrations.filter((r) => r.seatIndex != null).length;
+    const roomsBooked = (await this.getRoomsBookedByCeremony([ceremonyId])).get(ceremonyId);
 
     return {
-      ceremony: this.toCeremonyDto(ceremony, { registrationCount: registrations.length, totalAmount, seatsAssigned }),
+      ceremony: this.toCeremonyDto(ceremony, {
+        registrationCount: registrations.length,
+        totalAmount,
+        seatsAssigned,
+        roomsBooked,
+      }),
       totalAmount,
       registrationCount: registrations.length,
       registrations: registrationDtos,
@@ -1035,6 +1150,7 @@ export class CeremonyService {
       seatsAssigned?: number;
       morningRegistered?: number;
       afternoonRegistered?: number;
+      roomsBooked?: Map<string, number>;
     },
   ): CeremonyDto {
     return {
@@ -1055,7 +1171,17 @@ export class CeremonyService {
       morningRegistered: stats?.morningRegistered ?? 0,
       afternoonRegistered: stats?.afternoonRegistered ?? 0,
       registrationDeadline: ceremony.registrationDeadline,
-      roomTypes: ceremony.roomTypes ?? null,
+      roomTypes: ceremony.roomTypes
+        ? ceremony.roomTypes.map((r) => ({
+            name: r.name,
+            capacity: r.capacity,
+            fee: r.fee,
+            roomCount: r.roomCount ?? null,
+            roomsBooked: stats?.roomsBooked?.get(r.name) ?? 0,
+          }))
+        : null,
+      busCount: ceremony.busCount ?? null,
+      busCapacity: ceremony.busCount ? ceremony.busCount * PILGRIMAGE_BUS_SEAT_COUNT : null,
       registrationCount: stats?.registrationCount ?? 0,
       totalAmount: stats?.totalAmount ?? 0,
     };
@@ -1084,6 +1210,7 @@ export class CeremonyService {
         morning: string;
         afternoon: string;
       }>();
+    const roomsBookedByCeremony = await this.getRoomsBookedByCeremony(ceremonyIds);
     const statsMap = new Map(
       rows.map((r) => [
         r.ceremonyId,
@@ -1093,6 +1220,7 @@ export class CeremonyService {
           seatsAssigned: Number(r.seatsAssigned),
           morningRegistered: Number(r.morning),
           afternoonRegistered: Number(r.afternoon),
+          roomsBooked: roomsBookedByCeremony.get(r.ceremonyId),
         },
       ]),
     );
@@ -1120,6 +1248,8 @@ export class CeremonyService {
       seatNumber: registration.seatNumber,
       session: registration.session ?? null,
       queueNumber: registration.queueNumber ?? null,
+      roomType: registration.roomType ?? null,
+      roomNumber: registration.roomNumber ?? null,
       createdAt: registration.createdAt.toISOString(),
       receiptId,
     };

@@ -43,13 +43,19 @@ const withId = <T extends object>(row: T): T & { id: string; createdAt: Date } =
  */
 export function mockRepo() {
   const qb = mockQueryBuilder();
+  // 交易內的查詢（例如進香報名鎖住活動後再算剩餘房間與座位）用另一個假 QueryBuilder，才能跟交易外的查詢分開設定
+  const txQb = mockQueryBuilder();
   const txManager = {
     create: jest.fn((_entity: unknown, data: object) => ({ ...data })),
     save: jest.fn(async (row: object) => withId(row)),
     getRepository: jest.fn(),
+    findOne: jest.fn().mockResolvedValue(null),
+    count: jest.fn().mockResolvedValue(0),
+    createQueryBuilder: jest.fn(() => txQb),
   };
   return {
     qb,
+    txQb,
     txManager,
     create: jest.fn((data: object | object[]) => (Array.isArray(data) ? data.map((d) => ({ ...d })) : { ...data })),
     save: jest.fn(async (data: object | object[]) => (Array.isArray(data) ? data.map(withId) : withId(data))),
@@ -67,6 +73,7 @@ export function mockRepo() {
       transaction: jest.fn(async (work: (m: typeof txManager) => unknown) => work(txManager)),
       // 查廟宇是否存在（建立活動／燈牆時使用）：預設存在，要測「廟宇不存在」時覆寫成 null
       findOne: jest.fn().mockResolvedValue({ id: "t1" }),
+      createQueryBuilder: jest.fn(() => qb),
     },
   };
 }

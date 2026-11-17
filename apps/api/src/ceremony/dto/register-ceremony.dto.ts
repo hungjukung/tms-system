@@ -1,5 +1,5 @@
 import { CeremonySession } from "@tms/shared";
-import { IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min, MaxLength } from "class-validator";
+import { ArrayMaxSize, IsArray, IsBoolean, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Min, MaxLength } from "class-validator";
 
 export class RegisterCeremonyDto {
   @IsUUID()
@@ -56,21 +56,16 @@ export class RegisterCeremonyDto {
   @IsEnum(CeremonySession)
   session?: CeremonySession;
 
-  /** 進香多人報名：一次選多個座位 */
+  /** 進香多人報名：每位參加者的信徒 id（第 1 位是報名者本人；臨櫃參加者填空字串，格式在 service 內另行檢查），陣列長度就是參加人數 */
   @IsOptional()
   @IsArray()
-  @IsInt({ each: true })
-  @Min(1, { each: true })
-  seatIndexes?: number[];
-
-  /** 與 seatIndexes 一一對應的同行乘客信徒 id，沒有對應信徒的座位填空字串（格式在 service 內另行檢查） */
-  @IsOptional()
-  @IsArray()
+  @ArrayMaxSize(50)
   @IsString({ each: true })
   passengerMemberIds?: string[];
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(50)
   @IsString({ each: true })
   @MaxLength(50, { each: true })
   passengerNames?: string[];

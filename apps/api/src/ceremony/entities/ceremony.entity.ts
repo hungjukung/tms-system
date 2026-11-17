@@ -48,6 +48,10 @@ export class Ceremony {
   @Column({ type: "jsonb", nullable: true })
   roomTypes: PilgrimageRoomType[] | null;
 
+  /** 進香遊覽車台數（每台座位數固定為 PILGRIMAGE_BUS_SEAT_COUNT），用來限制總報名人數 */
+  @Column({ type: "int", nullable: true })
+  busCount: number | null;
+
   /** 已配發的座位數（內部座位計數器，透過原子性 UPDATE 遞增以避免並發搶位重複） */
   @Column({ type: "int", default: 0 })
   nextSeatIndex: number;

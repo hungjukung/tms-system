@@ -52,6 +52,13 @@ export class CeremonyRegistration {
   @Column({ type: "int", nullable: true })
   queueNumber: number | null;
 
+  /** 進香：所訂房型名稱與第幾間（同一筆報名的參加者住同一間，第幾間相同） */
+  @Column({ type: "varchar", nullable: true })
+  roomType: string | null;
+
+  @Column({ type: "int", nullable: true })
+  roomNumber: number | null;
+
   @Column()
   createdByUserId: string;
 

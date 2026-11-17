@@ -48,7 +48,6 @@ import { getCeremonySeats, listCeremonies } from "../api/ceremony";
 import { submitActivities } from "../api/activities";
 import { getHouseholdMembers } from "../api/households";
 import { MemberSelect } from "../components/MemberSelect";
-import { BusSeatMap, busSeatLabel } from "../components/BusSeatMap";
 import { HouseholdSelect } from "../components/HouseholdSelect";
 import { openPrintWindow } from "../api/client";
 import { getReceiptDetails } from "../api/print";
@@ -647,88 +646,6 @@ function CeremonySeatModal({
   );
 }
 
-/**
- * 進香遊覽車選位：在座位圖上點選空位（可多選，再點一次取消）。
- * requiredCount 有值時（整戶報名）必須剛好選滿該數量；否則至少選 1 位、不限人數（多人同行一起報名）。
- * reservedSeatIndexes：本次收據已加入、但還沒送出的座位，顯示成已有人，避免同一張收據重複選到同一個座位。
- */
-function BusSeatModal({
-  open,
-  onClose,
-  ceremonyId,
-  ceremonyName,
-  requiredCount,
-  reservedSeatIndexes,
-  onConfirm,
-}: {
-  open: boolean;
-  onClose: () => void;
-  ceremonyId: string;
-  ceremonyName: string;
-  requiredCount?: number;
-  reservedSeatIndexes: number[];
-  onConfirm: (seats: CeremonySeatDto[]) => void;
-}) {
-  const [chosen, setChosen] = useState<CeremonySeatDto[]>([]);
-  const seatsQuery = useQuery({
-    queryKey: ["ceremony-seats", ceremonyId],
-    queryFn: () => getCeremonySeats(ceremonyId),
-    enabled: open,
-  });
-
-  useEffect(() => {
-    if (!open) setChosen([]);
-  }, [open]);
-
-  const reserved = new Set(reservedSeatIndexes);
-  const seats = (seatsQuery.data ?? []).map((seat) =>
-    seat.status === "EMPTY" && reserved.has(seat.seatIndex)
-      ? { ...seat, status: "TAKEN" as const, participantName: "本次已加入" }
-      : seat,
-  );
-
-  const toggle = (seat: CeremonySeatDto) => {
-    setChosen((prev) => {
-      if (prev.some((s) => s.seatIndex === seat.seatIndex)) return prev.filter((s) => s.seatIndex !== seat.seatIndex);
-      if (requiredCount != null && prev.length >= requiredCount) return prev;
-      return [...prev, seat];
-    });
-  };
-
-  const canConfirm = requiredCount != null ? chosen.length === requiredCount : chosen.length > 0;
-
-  return (
-    <Modal
-      title={`遊覽車選位：${ceremonyName}`}
-      open={open}
-      onCancel={onClose}
-      width={480}
-      footer={
-        <Button type="primary" disabled={!canConfirm} onClick={() => onConfirm(chosen)}>
-          確認選位（已選 {chosen.length}
-          {requiredCount != null ? ` / ${requiredCount}` : ""} 位）
-        </Button>
-      }
-    >
-      {seatsQuery.isLoading ? (
-        <Typography.Text>載入中...</Typography.Text>
-      ) : (
-        <Space direction="vertical" style={{ width: "100%" }} size="small">
-          <Typography.Text type="secondary">
-            {requiredCount != null
-              ? `請點選 ${requiredCount} 個座位，依點選順序對應每一位參加者`
-              : "請點選座位，可一次選多個（多人同行）；第一個點選的座位是報名者本人"}
-          </Typography.Text>
-          <BusSeatMap seats={seats} chosenSeatIndexes={chosen.map((s) => s.seatIndex)} onSeatClick={toggle} />
-          {chosen.length > 0 && (
-            <Typography.Text>已選：{chosen.map(busSeatLabel).join("、")}</Typography.Text>
-          )}
-        </Space>
-      )}
-    </Modal>
-  );
-}
-
 function CeremonyRegistrationFields({
   ceremonies,
   pendingItems,
@@ -755,8 +672,6 @@ function CeremonyRegistrationFields({
   const tableLabel = Form.useWatch("tableLabel", form);
   const noSeatNeeded = Form.useWatch("noSeatNeeded", form);
   const session = Form.useWatch("session", form) as CeremonySession | undefined;
-  const multiSeatIndexes = Form.useWatch("multiSeatIndexes", form) as number[] | undefined;
-  const multiSeatLabels = Form.useWatch("multiSeatLabels", form) as string[] | undefined;
   const participants = Form.useWatch("participants", form) as PilgrimParticipant[] | undefined;
   const roomTypeName = Form.useWatch("roomType", form) as string | undefined;
   const selectedCeremony = ceremonies.find((c) => c.id === ceremonyId);
@@ -801,14 +716,28 @@ function CeremonyRegistrationFields({
   const hasRooms = roomTypes.length > 0;
   const selectedRoom = roomTypes.find((r) => r.name === roomTypeName);
   const needsSeatPicker = !isJigai && selectedCeremony?.totalSeats != null;
-  // 進香：先登錄所有參加者（每位可以是已建檔信徒或臨櫃香客），再依人數在遊覽車座位圖選相同數量的座位
+  // 進香：登錄所有參加者（每位可以是已建檔信徒或臨櫃香客），不選遊覽車座位；有房型時人數不可超過每間人數
   const isMultiSeatMode = isPilgrimage && (payerMode === "member" || payerMode === "walkIn");
   const participantCount = isMultiSeatMode ? (participants?.length ?? 0) : 0;
+  // 本次收據已加入、尚未送出的同活動進香報名：也要算進剩餘房間與遊覽車座位，避免同一張收據超訂
+  const pendingPilgrimage = pendingItems.filter((item) => isPilgrimage && item.request.ceremonyId === ceremonyId);
+  const pendingRoomsOf = (name: string) => pendingPilgrimage.filter((item) => item.request.roomType === name).length;
+  const roomsLeftOf = (r: (typeof roomTypes)[number]) =>
+    r.roomCount == null ? null : r.roomCount - r.roomsBooked - pendingRoomsOf(r.name);
+  const pendingParticipants = pendingPilgrimage.reduce(
+    (sum, item) => sum + Math.max(1, item.request.passengerMemberIds?.length ?? 0),
+    0,
+  );
+  const busSeatsLeft =
+    isPilgrimage && selectedCeremony?.busCapacity != null
+      ? selectedCeremony.busCapacity - selectedCeremony.registrationCount - pendingParticipants
+      : null;
+  const overRoomCapacity = !!selectedRoom && participantCount > selectedRoom.capacity;
+  const overBusCapacity = busSeatsLeft != null && participantCount > busSeatsLeft;
   // 本次收據已加入、尚未送出的座位，在選位圖上顯示成已有人，避免重複選到
   const reservedSeatIndexes = pendingItems
     .filter((item) => item.request.ceremonyId === ceremonyId)
     .flatMap((item) => [
-      ...(item.request.seatIndexes ?? []),
       ...(item.request.householdSeatIndexes ?? []),
       ...(item.request.seatIndex != null ? [item.request.seatIndex] : []),
     ]);
@@ -831,8 +760,8 @@ function CeremonyRegistrationFields({
     if ((!needsSeatPicker || isPilgrimage) && payerMode === "table") {
       form.setFieldValue("payerMode", "member");
     }
-    // 進香的參加者名單本身就能登錄臨櫃香客，不需要另外的「臨櫃香客」報名者類型
-    if (isPilgrimage && payerMode === "walkIn") {
+    // 進香的參加者名單本身就能登錄臨櫃香客，不需要另外的「臨櫃香客」「整戶報名」報名者類型
+    if (isPilgrimage && (payerMode === "walkIn" || payerMode === "household")) {
       form.setFieldValue("payerMode", "member");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -846,38 +775,19 @@ function CeremonyRegistrationFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMultiSeatMode, participantCount, selectedCeremony]);
 
-  // 進香房型：選了房型就自動帶入房型費用，並把參加者名單調整成房型人數
+  // 進香房型：選了房型就自動帶入房型費用（整間房），參加人數不用剛好等於房型人數
   useEffect(() => {
     if (!isMultiSeatMode || !hasRooms) return;
-    if (!selectedRoom) {
-      form.setFieldValue("amount", undefined);
-      return;
-    }
-    form.setFieldValue("amount", selectedRoom.fee);
-    const current = (form.getFieldValue("participants") ?? []) as PilgrimParticipant[];
-    if (current.length !== selectedRoom.capacity) {
-      const next = current.slice(0, selectedRoom.capacity);
-      while (next.length < selectedRoom.capacity) next.push({ mode: "member" } as PilgrimParticipant);
-      form.setFieldValue("participants", next);
-    }
+    form.setFieldValue("amount", selectedRoom ? selectedRoom.fee : undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMultiSeatMode, hasRooms, selectedRoom]);
-
-  // 參加人數變了，原本選的座位數就對不上，清空讓報名者重新選位
-  useEffect(() => {
-    if ((multiSeatIndexes?.length ?? 0) > 0 && multiSeatIndexes!.length !== participantCount) {
-      form.setFieldValue("multiSeatIndexes", undefined);
-      form.setFieldValue("multiSeatLabels", undefined);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [participantCount]);
 
   const readyToAdd =
     !!ceremonyId &&
     (payerMode === "household"
       ? !!householdId && headcount > 0
       : isMultiSeatMode
-        ? participantCount > 0
+        ? participantCount > 0 && (!hasRooms || !!selectedRoom) && !overRoomCapacity && !overBusCapacity
         : payerMode === "walkIn"
           ? !!walkInName
           : !!memberId) &&
@@ -888,9 +798,7 @@ function CeremonyRegistrationFields({
         ? (householdSeatIndexes?.length ?? 0) === headcount
         : payerMode === "table"
           ? !!tableNumber
-          : isMultiSeatMode
-            ? (multiSeatIndexes?.length ?? 0) === participantCount
-            : canSkipSeat && noSeatNeeded
+          : canSkipSeat && noSeatNeeded
             ? true
             : !!seatIndex);
 
@@ -900,7 +808,7 @@ function CeremonyRegistrationFields({
    */
   const handleAdd = async () => {
     const values = await form.validateFields();
-    // 進香：參加者名單依序對應選好的座位，第 1 位是收據上的報名者，其餘是同行參加者
+    // 進香：參加者名單第 1 位是收據上的報名者，其餘是同行參加者
     const plist = (isMultiSeatMode ? (values.participants ?? []) : []) as PilgrimParticipant[];
     const isWalkIn = (pt?: PilgrimParticipant) => pt?.mode === "walkIn";
     if (isMultiSeatMode && hasRooms) {
@@ -908,15 +816,14 @@ function CeremonyRegistrationFields({
         message.error("請選擇房型");
         return;
       }
-      if (plist.length !== selectedRoom.capacity) {
-        message.error(`${selectedRoom.name}需登錄 ${selectedRoom.capacity} 位參加者，目前為 ${plist.length} 位`);
+      if (plist.length > selectedRoom.capacity) {
+        message.error(`${selectedRoom.name}每間最多 ${selectedRoom.capacity} 人，目前登錄 ${plist.length} 人`);
         return;
       }
     }
     if (isMultiSeatMode) {
-      const seatCount = (values.multiSeatIndexes as number[] | undefined)?.length ?? 0;
-      if (seatCount !== plist.length) {
-        message.error(`參加者共 ${plist.length} 位，請重新選擇 ${plist.length} 個座位`);
+      if (busSeatsLeft != null && plist.length > busSeatsLeft) {
+        message.error(`遊覽車座位不足，只剩 ${Math.max(busSeatsLeft, 0)} 位`);
         return;
       }
       const memberIds = plist.filter((pt) => !isWalkIn(pt)).map((pt) => pt.memberId as string);
@@ -949,7 +856,6 @@ function CeremonyRegistrationFields({
       wishText: values.wishText,
       seatIndex:
         values.payerMode === "household" || values.payerMode === "table" || isMultiSeatMode ? undefined : values.seatIndex,
-      seatIndexes: isMultiSeatMode ? values.multiSeatIndexes : undefined,
       passengerMemberIds: isMultiSeatMode
         ? plist.map((pt, i) => (i === 0 || isWalkIn(pt) ? "" : (pt.memberId ?? "")))
         : undefined,
@@ -971,10 +877,8 @@ function CeremonyRegistrationFields({
       const names = householdMembersQuery.data?.map((m) => m.name).join("、") ?? "";
       displayLabel = `${ceremonyName}（整戶 ${names}${householdSeatLabel ? `　${householdSeatLabel}` : ""}）`;
     } else if (isMultiSeatMode) {
-      const seatsText = (multiSeatLabels ?? [])
-        .map((label, i) => `${pilgrimParticipantName(plist[i])} ${label}`.trim())
-        .join("、");
-      displayLabel = `${ceremonyName}（${selectedRoom ? `${selectedRoom.name}　` : ""}${seatsText}）`;
+      const namesText = plist.map((pt) => pilgrimParticipantName(pt)).join("、");
+      displayLabel = `${ceremonyName}（${selectedRoom ? `${selectedRoom.name}　` : ""}${namesText}）`;
     } else {
       const payerName = values.payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
       displayLabel = `${ceremonyName}（${payerName}${
@@ -990,20 +894,6 @@ function CeremonyRegistrationFields({
           <div style={{ textAlign: "center", padding: "16px 0" }}>
             <div style={{ fontSize: 12, color: "#888" }}>認領整桌</div>
             <div style={{ fontSize: 40, fontWeight: "bold", color: "#a8071a" }}>{tableLabel}</div>
-          </div>
-        ),
-      });
-    } else if (isMultiSeatMode && multiSeatLabels?.length) {
-      modal.success({
-        title: "已加入本次活動報名項目",
-        content: (
-          <div style={{ textAlign: "center", padding: "16px 0" }}>
-            <div style={{ fontSize: 12, color: "#888" }}>遊覽車座位（{multiSeatLabels.length} 位）</div>
-            {multiSeatLabels.map((label, i) => (
-              <div key={label} style={{ fontSize: 22, fontWeight: "bold", color: "#a8071a" }}>
-                {label}　{pilgrimParticipantName(plist[i])}
-              </div>
-            ))}
           </div>
         ),
       });
@@ -1041,8 +931,6 @@ function CeremonyRegistrationFields({
       tableLabel: undefined,
       noSeatNeeded: false,
       session: undefined,
-      multiSeatIndexes: undefined,
-      multiSeatLabels: undefined,
       participants: [{ mode: "member" }],
       roomType: undefined,
     });
@@ -1065,9 +953,11 @@ function CeremonyRegistrationFields({
               label: `${c.name}（${c.date}，${c.roomTypes?.length ? "依房型" : feeModeLabel[c.feeMode]}）${
                 c.kind === CeremonyKind.JIGAI
                   ? `　上午 ${c.morningRegistered}/${c.morningCapacity}　下午 ${c.afternoonRegistered}/${c.afternoonCapacity}`
-                  : c.totalSeats
-                    ? `　${c.kind === CeremonyKind.PILGRIMAGE ? "遊覽車座位" : "座位"} ${c.seatsAssigned}/${c.totalSeats}`
-                    : ""
+                  : c.kind === CeremonyKind.PILGRIMAGE && c.busCapacity != null
+                    ? `　遊覽車 ${c.registrationCount}/${c.busCapacity} 人`
+                    : c.totalSeats
+                      ? `　座位 ${c.seatsAssigned}/${c.totalSeats}`
+                      : ""
               }`,
             }))}
             onChange={(value) => {
@@ -1084,8 +974,6 @@ function CeremonyRegistrationFields({
               form.setFieldValue("tableLabel", undefined);
               form.setFieldValue("session", undefined);
               form.setFieldValue("roomType", undefined);
-              form.setFieldValue("multiSeatIndexes", undefined);
-              form.setFieldValue("multiSeatLabels", undefined);
               form.setFieldValue("householdSeatIndexes", undefined);
               form.setFieldValue("householdSeatLabel", undefined);
             }}
@@ -1095,12 +983,24 @@ function CeremonyRegistrationFields({
           <Form.Item label="房型" name="roomType" rules={[{ required: true, message: "請選擇房型" }]}>
             <Select
               placeholder="請選擇房型"
-              options={roomTypes.map((r) => ({
-                value: r.name,
-                label: `${r.name}（${r.capacity} 人，NT$ ${r.fee}）`,
-              }))}
+              options={roomTypes.map((r) => {
+                const left = roomsLeftOf(r);
+                return {
+                  value: r.name,
+                  label: `${r.name}（每間最多 ${r.capacity} 人，NT$ ${r.fee}${left != null ? `，剩 ${Math.max(left, 0)} 間` : ""}）`,
+                  disabled: left != null && left <= 0,
+                };
+              })}
             />
           </Form.Item>
+        )}
+        {isPilgrimage && busSeatsLeft != null && (
+          <Alert
+            type={busSeatsLeft > 0 ? "info" : "error"}
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={`遊覽車 ${selectedCeremony!.busCount} 台共 ${selectedCeremony!.busCapacity} 位，剩 ${Math.max(busSeatsLeft, 0)} 位`}
+          />
         )}
         {isJigai && selectedCeremony && (
           <Form.Item label="場次" name="session" rules={[{ required: true, message: "請選擇場次" }]}>
@@ -1124,7 +1024,7 @@ function CeremonyRegistrationFields({
           <Radio.Group>
             <Radio.Button value="member">{isPilgrimage ? "登錄參加者（可多人）" : "已建檔信徒"}</Radio.Button>
             {!isPilgrimage && <Radio.Button value="walkIn">臨櫃香客（免建檔）</Radio.Button>}
-            <Radio.Button value="household">整戶報名</Radio.Button>
+            {!isPilgrimage && <Radio.Button value="household">整戶報名</Radio.Button>}
             {needsSeatPicker && !isPilgrimage && <Radio.Button value="table">認領整桌</Radio.Button>}
           </Radio.Group>
         </Form.Item>
@@ -1135,14 +1035,13 @@ function CeremonyRegistrationFields({
                 <Space direction="vertical" style={{ width: "100%" }}>
                   {fields.map((field, index) => {
                     const mode = participants?.[field.name]?.mode ?? "member";
-                    const seat = multiSeatLabels?.[index];
                     return (
                       <Card
                         key={field.key}
                         size="small"
-                        title={`參加者 ${index + 1}${index === 0 ? "（報名者）" : ""}${seat ? `　座位 ${seat}` : ""}`}
+                        title={`參加者 ${index + 1}${index === 0 ? "（報名者）" : ""}`}
                         extra={
-                          fields.length > 1 && !hasRooms && (
+                          fields.length > 1 && (
                             <Button size="small" danger onClick={() => remove(field.name)}>
                               移除
                             </Button>
@@ -1187,13 +1086,16 @@ function CeremonyRegistrationFields({
                       </Card>
                     );
                   })}
-                  {hasRooms ? (
-                    <Typography.Text type="secondary">
-                      {selectedRoom
-                        ? `${selectedRoom.name}固定 ${selectedRoom.capacity} 位參加者`
-                        : "請先選擇房型，參加者人數會依房型自動帶入"}
+                  {selectedRoom && (
+                    <Typography.Text type={overRoomCapacity ? "danger" : "secondary"}>
+                      {selectedRoom.name}每間最多 {selectedRoom.capacity} 人，目前 {fields.length} 人
+                      {overRoomCapacity ? "，請移除多出的參加者或改選較大的房型" : ""}
                     </Typography.Text>
-                  ) : (
+                  )}
+                  {overBusCapacity && (
+                    <Typography.Text type="danger">遊覽車座位不足，只剩 {Math.max(busSeatsLeft ?? 0, 0)} 位</Typography.Text>
+                  )}
+                  {(!selectedRoom || fields.length < selectedRoom.capacity) && (
                     <Button type="dashed" block onClick={() => add({ mode: "member" })}>
                       ＋ 新增參加者
                     </Button>
@@ -1289,12 +1191,6 @@ function CeremonyRegistrationFields({
         <Form.Item name="tableLabel" hidden>
           <Input />
         </Form.Item>
-        <Form.Item name="multiSeatIndexes" hidden>
-          <Input />
-        </Form.Item>
-        <Form.Item name="multiSeatLabels" hidden>
-          <Input />
-        </Form.Item>
         {needsSeatPicker && payerMode === "household" && !householdReadyForSeats && (
           <Form.Item label="座位">
             <Typography.Text type="secondary">請先選擇戶籍才能選位</Typography.Text>
@@ -1309,11 +1205,7 @@ function CeremonyRegistrationFields({
           <Form.Item label={payerMode === "table" ? "桌次" : "座位"} required>
             <Space align="center" wrap>
               <Button onClick={() => setSeatModalOpen(true)}>
-                {isMultiSeatMode
-                  ? multiSeatIndexes?.length
-                    ? "重新選擇座位"
-                    : `選擇遊覽車座位（需選 ${participantCount} 位）`
-                  : payerMode === "table"
+                {payerMode === "table"
                   ? tableNumber
                     ? "重新選擇桌次"
                     : "選擇桌次"
@@ -1325,16 +1217,7 @@ function CeremonyRegistrationFields({
                       ? "重新選擇座位"
                       : "選擇座位"}
               </Button>
-              {isMultiSeatMode
-                ? !!multiSeatLabels?.length && (
-                    <Tag color="green">
-                      已選 {multiSeatLabels.length} 位：
-                      {multiSeatLabels
-                        .map((label, i) => `${label} ${pilgrimParticipantName(participants?.[i])}`.trim())
-                        .join("、")}
-                    </Tag>
-                  )
-                : payerMode === "table"
+              {payerMode === "table"
                 ? tableLabel && <Tag color="green">已選 {tableLabel}</Tag>
                 : payerMode === "household"
                   ? householdSeatLabel && <Tag color="green">已選位 {householdSeatLabel}</Tag>
@@ -1343,28 +1226,6 @@ function CeremonyRegistrationFields({
           </Form.Item>
         )}
       </Form>
-
-      {showSeatPicker && isPilgrimage && (
-        <BusSeatModal
-          open={seatModalOpen}
-          onClose={() => setSeatModalOpen(false)}
-          ceremonyId={selectedCeremony!.id}
-          ceremonyName={selectedCeremony!.name}
-          requiredCount={payerMode === "household" ? headcount : participantCount}
-          reservedSeatIndexes={reservedSeatIndexes}
-          onConfirm={(seats) => {
-            const labels = seats.map(busSeatLabel);
-            if (payerMode === "household") {
-              form.setFieldValue("householdSeatIndexes", seats.map((s) => s.seatIndex));
-              form.setFieldValue("householdSeatLabel", labels.join("、"));
-            } else {
-              form.setFieldValue("multiSeatIndexes", seats.map((s) => s.seatIndex));
-              form.setFieldValue("multiSeatLabels", labels);
-            }
-            setSeatModalOpen(false);
-          }}
-        />
-      )}
 
       {showSeatPicker && !isPilgrimage && (
         <CeremonySeatModal

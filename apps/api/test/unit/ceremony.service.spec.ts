@@ -41,8 +41,17 @@ describe("CeremonyService（白箱）", () => {
   });
   const jigai = (overrides: object = {}) =>
     general({ name: "祭改", kind: CeremonyKind.JIGAI, tableCount: null, seatsPerTable: null, morningCapacity: 3, afternoonCapacity: 2, ...overrides });
+  const DOUBLE_ROOM = { name: "雙人房", capacity: 2, fee: 3000, roomCount: 2 };
   const pilgrimage = (overrides: object = {}) =>
-    general({ name: "進香", kind: CeremonyKind.PILGRIMAGE, tableCount: null, seatsPerTable: null, ...overrides });
+    general({
+      name: "進香",
+      kind: CeremonyKind.PILGRIMAGE,
+      tableCount: null,
+      seatsPerTable: null,
+      busCount: 1,
+      roomTypes: [DOUBLE_ROOM],
+      ...overrides,
+    });
 
   beforeEach(() => {
     ceremonyRepo = mockRepo();
@@ -82,30 +91,51 @@ describe("CeremonyService（白箱）", () => {
       expect(internals.formatSeatNumber(6, 3)).toBe("2-3");
     });
 
-    it("totalSeatsOf：一般活動＝桌數×每桌人數；沒設桌數是 null；祭改是 null；進香固定 40", () => {
+    it("totalSeatsOf：一般活動＝桌數×每桌人數；沒設桌數是 null；祭改、進香不選座位，都是 null", () => {
       expect(internals.totalSeatsOf(general())).toBe(6);
       expect(internals.totalSeatsOf(general({ tableCount: null }))).toBeNull();
       expect(internals.totalSeatsOf(general({ seatsPerTable: null }))).toBeNull();
       expect(internals.totalSeatsOf(jigai())).toBeNull();
-      expect(internals.totalSeatsOf(pilgrimage())).toBe(40);
+      expect(internals.totalSeatsOf(pilgrimage())).toBeNull();
     });
 
-    it("isValidSeat：一般活動看 1～總座位數；進香看遊覽車座位配置", () => {
+    it("isValidSeat：一般活動看 1～總座位數；進香沒有座位，一律不合法", () => {
       const c = general();
       expect([0, 1, 6, 7, 1.5].map((i) => internals.isValidSeat(c, i))).toEqual([false, true, true, false, false]);
       expect(internals.isValidSeat(general({ tableCount: null }), 1)).toBe(false);
-      const p = pilgrimage();
-      expect([1, 3, 9, 48, 49].map((i) => internals.isValidSeat(p, i))).toEqual([true, false, true, true, false]);
+      expect(internals.isValidSeat(pilgrimage(), 1)).toBe(false);
     });
 
-    it("seatNumberOf / seatOnlyLabel：進香每排固定 4 座，文字用「排」；一般活動用「桌」", () => {
-      expect(internals.seatNumberOf(pilgrimage(), 9)).toBe("3-1");
-      expect(internals.seatOnlyLabel(pilgrimage(), 9)).toBe("3排1號");
-      expect(internals.seatOnlyLabel(pilgrimage(), 48)).toBe("12排4號");
+    it("seatNumberOf / seatOnlyLabel：依每桌人數換算成「桌-位」與「2桌1號」", () => {
+      expect(internals.seatNumberOf(general(), 4)).toBe("2-1");
       expect(internals.seatOnlyLabel(general(), 4)).toBe("2桌1號");
+      expect(internals.seatOnlyLabel(general(), 6)).toBe("2桌3號");
     });
 
-    it("formatSeatLabel：依活動種類決定「桌」或「排」", () => {
+    it("pickRoomNumber：取該房型最小的空房號；中間有空房先補；訂滿回傳 null；間數不限就一直往後", () => {
+      expect(internals.pickRoomNumber(new Set(), 2)).toBe(1);
+      expect(internals.pickRoomNumber(new Set([2]), 2)).toBe(1);
+      expect(internals.pickRoomNumber(new Set([1]), 2)).toBe(2);
+      expect(internals.pickRoomNumber(new Set([1, 2]), 2)).toBeNull();
+      expect(internals.pickRoomNumber(new Set([1, 2, 3]), null)).toBe(4);
+    });
+
+    it("normalizeRoomTypes：去掉名稱前後空白、沒給間數存 null；沒有房型回傳 null；名稱空白或重複 400", () => {
+      expect(internals.normalizeRoomTypes(undefined)).toBeNull();
+      expect(internals.normalizeRoomTypes([])).toBeNull();
+      expect(internals.normalizeRoomTypes([{ name: " 雙人房 ", capacity: 2, fee: 3000 }])).toEqual([
+        { name: "雙人房", capacity: 2, fee: 3000, roomCount: null },
+      ]);
+      expect(() => internals.normalizeRoomTypes([{ name: "  ", capacity: 2, fee: 0 }])).toThrow("房型名稱不可空白");
+      expect(() =>
+        internals.normalizeRoomTypes([
+          { name: "雙人房", capacity: 2, fee: 0 },
+          { name: "雙人房 ", capacity: 4, fee: 0 },
+        ]),
+      ).toThrow("房型名稱不可重複");
+    });
+
+    it("formatSeatLabel：依活動種類決定「桌」或「排」（「排」只用在改版前遊覽車選位的舊資料）", () => {
       expect(internals.formatSeatLabel("1-8")).toBe("座位：1桌8號");
       expect(internals.formatSeatLabel("1-8", CeremonyKind.GENERAL)).toBe("座位：1桌8號");
       expect(internals.formatSeatLabel("3-2", CeremonyKind.PILGRIMAGE)).toBe("座位：3排2號");
@@ -225,14 +255,46 @@ describe("CeremonyService（白箱）", () => {
       );
     });
 
-    it("進香：桌次與場次人數都忽略，回傳的座位總數是 40", async () => {
+    it("進香：存遊覽車台數與房型，桌次與場次人數都忽略；可載人數 = 台數 × 40，沒有座位總數", async () => {
       const result = await service.createCeremony(
-        dto({ kind: CeremonyKind.PILGRIMAGE, tableCount: 5, seatsPerTable: 5, morningCapacity: 5, afternoonCapacity: 5 }) as never,
+        dto({
+          kind: CeremonyKind.PILGRIMAGE,
+          busCount: 2,
+          roomTypes: [{ ...DOUBLE_ROOM, name: " 雙人房 " }],
+          tableCount: 5,
+          seatsPerTable: 5,
+          morningCapacity: 5,
+          afternoonCapacity: 5,
+        }) as never,
       );
       expect(ceremonyRepo.create).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: CeremonyKind.PILGRIMAGE, tableCount: null, seatsPerTable: null, morningCapacity: null }),
+        expect.objectContaining({
+          kind: CeremonyKind.PILGRIMAGE,
+          busCount: 2,
+          roomTypes: [DOUBLE_ROOM],
+          tableCount: null,
+          seatsPerTable: null,
+          morningCapacity: null,
+        }),
       );
-      expect(result.totalSeats).toBe(40);
+      expect(result).toMatchObject({ totalSeats: null, busCount: 2, busCapacity: 80 });
+      expect(result.roomTypes).toEqual([{ ...DOUBLE_ROOM, roomsBooked: 0 }]);
+    });
+
+    it.each([
+      ["沒有遊覽車台數", { roomTypes: [DOUBLE_ROOM] }, "進香活動請設定遊覽車台數"],
+      ["沒有房型", { busCount: 1 }, "進香活動請至少設定一種房型"],
+      ["房型是空陣列", { busCount: 1, roomTypes: [] }, "進香活動請至少設定一種房型"],
+    ])("進香%s：400，而且不會寫入資料庫", async (_label, overrides, message) => {
+      await expect(service.createCeremony(dto({ kind: CeremonyKind.PILGRIMAGE, ...overrides }) as never)).rejects.toThrow(
+        new BadRequestException(message),
+      );
+      expect(ceremonyRepo.save).not.toHaveBeenCalled();
+    });
+
+    it("非進香活動：房型與遊覽車台數都不存", async () => {
+      await service.createCeremony(dto({ busCount: 3, roomTypes: [DOUBLE_ROOM] }) as never);
+      expect(ceremonyRepo.create).toHaveBeenCalledWith(expect.objectContaining({ busCount: null, roomTypes: null }));
     });
   });
 
@@ -303,11 +365,60 @@ describe("CeremonyService（白箱）", () => {
       registrationRepo.qb.getRawOne.mockResolvedValue({ count: "0", total: null, seatsAssigned: "0", morning: "0", afternoon: "0" });
       ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
       const p = await service.updateCeremony("c1", { tableCount: 9, seatsPerTable: 9 } as never);
-      expect(p).toMatchObject({ tableCount: null, seatsPerTable: null, totalSeats: 40 });
+      expect(p).toMatchObject({ tableCount: null, seatsPerTable: null, totalSeats: null });
 
       ceremonyRepo.findOne.mockResolvedValue(general());
       const g = await service.updateCeremony("c1", { morningCapacity: 9 } as never);
       expect(g.morningCapacity).toBeNull();
+    });
+  });
+
+  describe("updateCeremony：進香的遊覽車台數與房型", () => {
+    beforeEach(() => {
+      registrationRepo.qb.getRawOne.mockResolvedValue({ count: "0", total: null, seatsAssigned: "0", morning: "0", afternoon: "0" });
+    });
+
+    it("台數不能少於已報名人數需要的台數（41 人要 2 台）；夠載就可以改", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(pilgrimage({ busCount: 3 }));
+      registrationRepo.count.mockResolvedValue(41);
+      await expect(service.updateCeremony("c1", { busCount: 1 } as never)).rejects.toThrow("已有 41 人報名，遊覽車至少需要 2 台");
+      const result = await service.updateCeremony("c1", { busCount: 2 } as never);
+      expect(result).toMatchObject({ busCount: 2, busCapacity: 80 });
+    });
+
+    it.each([
+      ["刪掉已有人訂的房型", [], "「雙人房」已有人預訂，不能刪除或改名"],
+      ["把已有人訂的房型改名", [{ ...DOUBLE_ROOM, name: "標準房" }], "「雙人房」已有人預訂，不能刪除或改名"],
+      ["間數少於已訂間數", [{ ...DOUBLE_ROOM, roomCount: 1 }], "「雙人房」已訂 2 間，間數不可少於此數"],
+      ["每間人數少於已入住人數", [{ ...DOUBLE_ROOM, capacity: 1 }], "「雙人房」已有一間住 2 人，每間人數不可少於此數"],
+    ])("房型：%s → 400，不存檔", async (_label, roomTypes, message) => {
+      ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
+      registrationRepo.qb.getRawMany.mockResolvedValueOnce([
+        { roomType: "雙人房", roomNumber: 1, occupants: "2" },
+        { roomType: "雙人房", roomNumber: 2, occupants: "1" },
+      ]);
+      await expect(service.updateCeremony("c1", { roomTypes } as never)).rejects.toThrow(new BadRequestException(message));
+      expect(ceremonyRepo.save).not.toHaveBeenCalled();
+    });
+
+    it("房型：加間數、新增房型可以；回傳每個房型已訂幾間", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
+      registrationRepo.qb.getRawMany
+        .mockResolvedValueOnce([{ roomType: "雙人房", roomNumber: 1, occupants: "2" }])
+        .mockResolvedValueOnce([{ ceremonyId: "c1", roomType: "雙人房", rooms: "1" }]);
+      const single = { name: "單人房", capacity: 1, fee: 2000, roomCount: 3 };
+      const result = await service.updateCeremony("c1", { roomTypes: [{ ...DOUBLE_ROOM, roomCount: 5 }, single] } as never);
+      expect(result.roomTypes).toEqual([
+        { ...DOUBLE_ROOM, roomCount: 5, roomsBooked: 1 },
+        { ...single, roomsBooked: 0 },
+      ]);
+    });
+
+    it("非進香活動送房型與台數：忽略", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(general());
+      const result = await service.updateCeremony("c1", { busCount: 3, roomTypes: [DOUBLE_ROOM] } as never);
+      expect(result).toMatchObject({ busCount: null, roomTypes: null });
+      expect(registrationRepo.count).not.toHaveBeenCalled();
     });
   });
 
@@ -548,24 +659,35 @@ describe("CeremonyService（白箱）", () => {
 
   // ───────────────────────────── 合併報名的分流 ─────────────────────────────
   describe("createRegistrationForCombined：依請求內容分流到不同的報名方式", () => {
+    it("活動不存在：404", async () => {
+      await expect(service.createRegistrationForCombined({ ceremonyId: "c1", amount: 0 } as never, "u1")).rejects.toThrow(
+        new NotFoundException("找不到活動"),
+      );
+    });
+
     it("有 householdId → 整戶報名（優先於其他欄位）", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(general());
       const spy = jest.spyOn(internals, "createHouseholdRegistrationForCombined").mockResolvedValue({ registrations: [] });
-      await service.createRegistrationForCombined({ ceremonyId: "c1", householdId: "h1", seatIndexes: [1], tableNumber: 1, amount: 0 } as never, "u1");
+      await service.createRegistrationForCombined({ ceremonyId: "c1", householdId: "h1", tableNumber: 1, amount: 0 } as never, "u1");
       expect(spy).toHaveBeenCalled();
     });
 
-    it("有 seatIndexes → 多座位報名；空陣列不算", async () => {
-      const multi = jest.spyOn(internals, "createMultiSeatRegistrationForCombined").mockResolvedValue({ registrations: [] });
-      await service.createRegistrationForCombined({ ceremonyId: "c1", seatIndexes: [1], amount: 0 } as never, "u1");
-      expect(multi).toHaveBeenCalledTimes(1);
+    it("進香活動 → 進香報名；進香帶 householdId 或 tableNumber：400", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
+      const spy = jest.spyOn(internals, "createPilgrimageRegistrationForCombined").mockResolvedValue({ registrations: [] });
+      await service.createRegistrationForCombined({ ceremonyId: "c1", walkInName: "甲", amount: 0 } as never, "u1");
+      expect(spy).toHaveBeenCalledTimes(1);
 
-      ceremonyRepo.findOne.mockResolvedValue(general({ tableCount: null, seatsPerTable: null }));
-      registrationRepo.findOne.mockResolvedValue({ id: "reg1", ceremonyId: "c1", walkInName: "甲", seatNumber: null, queueNumber: null });
-      await service.createRegistrationForCombined({ ceremonyId: "c1", seatIndexes: [], walkInName: "甲", amount: 0 } as never, "u1");
-      expect(multi).toHaveBeenCalledTimes(1);
+      for (const extra of [{ householdId: "h1" }, { tableNumber: 1 }]) {
+        await expect(
+          service.createRegistrationForCombined({ ceremonyId: "c1", walkInName: "甲", amount: 0, ...extra } as never, "u1"),
+        ).rejects.toThrow(new BadRequestException("進香請逐一登錄參加者，不能整戶或認領整桌報名"));
+      }
+      expect(spy).toHaveBeenCalledTimes(1);
     });
 
     it("有 tableNumber → 認領整桌", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(general());
       const spy = jest.spyOn(internals, "createTableRegistrationForCombined").mockResolvedValue({ registration: {} });
       await service.createRegistrationForCombined({ ceremonyId: "c1", tableNumber: 1, amount: 0 } as never, "u1");
       expect(spy).toHaveBeenCalled();
@@ -580,7 +702,7 @@ describe("CeremonyService（白箱）", () => {
   });
 
   // ───────────────────────────── 整戶／整桌 ─────────────────────────────
-  describe("整戶報名（一般活動／進香）", () => {
+  describe("整戶報名（一般活動）", () => {
     const members = [
       { id: MEMBER_A, name: "陳一" },
       { id: MEMBER_B, name: "陳二" },
@@ -606,8 +728,6 @@ describe("CeremonyService（白箱）", () => {
       ["選位數量與人數不符", { householdSeatIndexes: [1] }, general(), "選位數量與戶籍人數不符，請重新選位"],
       ["活動沒設座位", { householdSeatIndexes: [1, 2] }, general({ tableCount: null }), "此活動未設定座位"],
       ["座位超出範圍", { householdSeatIndexes: [1, 7] }, general(), "座位超出範圍"],
-      ["進香沒選位", {}, pilgrimage(), "請選擇遊覽車座位"],
-      ["進香選到門的位置", { householdSeatIndexes: [1, 3] }, pilgrimage(), "座位超出範圍"],
     ])("%s：400", async (_label, overrides, ceremony, message) => {
       ceremonyRepo.findOne.mockResolvedValue(ceremony);
       householdService.findMembersByHouseholdId.mockResolvedValue(members);
@@ -615,15 +735,15 @@ describe("CeremonyService（白箱）", () => {
       expect(registrationRepo.manager.transaction).not.toHaveBeenCalled();
     });
 
-    it("進香整戶：座位依序對應每個人，備註用「排」", async () => {
-      ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
+    it("一般活動整戶選位：座位依序對應每個人，備註列出座位", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(general());
       householdService.findMembersByHouseholdId.mockResolvedValue(members);
-      const result = await service.createRegistrationForCombined(dto({ householdSeatIndexes: [9, 10] }) as never, "u1");
-      expect(result.note).toBe("座位｜3排1號、3排2號");
+      const result = await service.createRegistrationForCombined(dto({ householdSeatIndexes: [4, 5] }) as never, "u1");
+      expect(result.note).toBe("座位｜2桌1號、2桌2號");
       const saved = registrationRepo.txManager.save.mock.calls.map(([row]: any) => [row.memberId, row.seatIndex, row.seatNumber, row.amount]);
       expect(saved).toEqual([
-        [MEMBER_A, 9, "3-1", "500.00"],
-        [MEMBER_B, 10, "3-2", "500.00"],
+        [MEMBER_A, 4, "2-1", "500.00"],
+        [MEMBER_B, 5, "2-2", "500.00"],
       ]);
     });
 
@@ -645,7 +765,7 @@ describe("CeremonyService（白箱）", () => {
       ["活動不存在", null, {}, "找不到活動"],
       ["活動沒設座位", general({ tableCount: null }), {}, "此活動未設定座位"],
       ["祭改活動", jigai(), {}, "此活動未設定座位"],
-      ["進香活動", pilgrimage(), {}, "此活動未設定座位"],
+      ["進香活動", pilgrimage(), {}, "進香請逐一登錄參加者，不能整戶或認領整桌報名"],
       ["桌號 0", general(), { tableNumber: 0 }, "桌號超出範圍"],
       ["桌號超過桌數", general(), { tableNumber: 3 }, "桌號超出範圍"],
     ])("%s：擋下", async (_label, ceremony, overrides, message) => {
@@ -693,92 +813,166 @@ describe("CeremonyService（白箱）", () => {
     });
   });
 
-  // ───────────────────────────── 進香多座位 ─────────────────────────────
-  describe("進香多位參加者（createMultiSeatRegistrationForCombined）", () => {
-    const dto = (overrides: object = {}) => ({ ceremonyId: "c1", walkInName: "阿土伯", amount: 2000, seatIndexes: [1, 2], ...overrides });
+  // ───────────────────────────── 進香 ─────────────────────────────
+  describe("進香報名（createPilgrimageRegistrationForCombined）", () => {
+    const dto = (overrides: object = {}) => ({
+      ceremonyId: "c1",
+      walkInName: "阿土伯",
+      roomType: "雙人房",
+      amount: 3000,
+      passengerMemberIds: ["", ""],
+      passengerNames: ["", "阿土嫂"],
+      ...overrides,
+    });
     const memberMap = () =>
       new Map([
         [MEMBER_A, { id: MEMBER_A, name: "王小明" }],
         [MEMBER_B, { id: MEMBER_B, name: "李大華" }],
       ]);
+    const register = (overrides: object = {}, ceremony: object = pilgrimage()) =>
+      internals.createPilgrimageRegistrationForCombined(dto(overrides), ceremony, "u1");
+    const savedRows = () => registrationRepo.txManager.save.mock.calls.map(([row]: any) => row);
 
     beforeEach(() => {
-      ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
       householdService.findMembersByIds.mockResolvedValue(memberMap());
+      // 交易內鎖住活動那一列：預設查得到
+      registrationRepo.txManager.findOne.mockResolvedValue(pilgrimage());
     });
 
     it.each([
-      ["活動不存在", { seatIndexes: [1] }, "找不到活動", true],
-      ["座位重複", { seatIndexes: [1, 1] }, "座位重複，請重新選擇", false],
-      ["座位是門的位置", { seatIndexes: [1, 3] }, "座位超出範圍", false],
-      ["信徒 id 格式不對", { passengerMemberIds: ["", "abc"] }, "信徒資料錯誤，請重新選擇", false],
-      ["同行的兩位是同一個信徒", { seatIndexes: [1, 2, 5], passengerMemberIds: ["", MEMBER_A, MEMBER_A] }, "同一位信徒不能重複報名，請檢查同行乘客", false],
-      ["同行者跟報名者是同一個信徒", { memberId: MEMBER_A, passengerMemberIds: ["", MEMBER_A] }, "同一位信徒不能重複報名，請檢查同行乘客", false],
-    ])("%s：擋下且不寫入資料", async (_label, overrides, message, missingCeremony) => {
-      if (missingCeremony) ceremonyRepo.findOne.mockResolvedValue(null);
-      await expect(internals.createMultiSeatRegistrationForCombined(dto(overrides), "u1")).rejects.toThrow(message);
+      ["沒有信徒也沒有姓名", { walkInName: "  " }, "請選擇信徒或填寫報名者姓名"],
+      ["沒選房型", { roomType: undefined }, "請選擇房型"],
+      ["房型不存在", { roomType: "豪華房" }, "請選擇房型"],
+      ["人數超過每間上限", { passengerMemberIds: ["", "", ""], passengerNames: ["", "乙", "丙"] }, "雙人房每間最多 2 人，目前登錄 3 人"],
+      ["金額不是房型費用", { amount: 1500 }, "雙人房費用為 NT$ 3000"],
+      ["信徒 id 格式不對", { passengerMemberIds: ["", "abc"] }, "信徒資料錯誤，請重新選擇"],
+      ["同行者跟報名者是同一個信徒", { memberId: MEMBER_A, passengerMemberIds: ["", MEMBER_A] }, "同一位信徒不能重複報名，請檢查參加者名單"],
+    ])("%s：400，不開交易、不寫入資料", async (_label, overrides, message) => {
+      await expect(register(overrides)).rejects.toThrow(new BadRequestException(message));
       expect(registrationRepo.manager.transaction).not.toHaveBeenCalled();
     });
 
-    it("沒有任何座位：400（直接呼叫內部方法才走得到，外層分流時空陣列會被當成單人報名）", async () => {
-      await expect(internals.createMultiSeatRegistrationForCombined(dto({ seatIndexes: [] }), "u1")).rejects.toThrow("請選擇座位");
-      await expect(internals.createMultiSeatRegistrationForCombined(dto({ seatIndexes: undefined }), "u1")).rejects.toThrow("請選擇座位");
-    });
-
-    it("活動沒有座位（例如祭改）：400", async () => {
-      ceremonyRepo.findOne.mockResolvedValue(jigai());
-      await expect(internals.createMultiSeatRegistrationForCombined(dto(), "u1")).rejects.toThrow("此活動未設定座位");
+    it("活動已過報名期限：400", async () => {
+      await expect(register({}, pilgrimage({ date: "2000-01-01" }))).rejects.toThrow("此活動已過報名期限，無法報名");
     });
 
     it("信徒 id 格式正確但查不到人：404", async () => {
       householdService.findMembersByIds.mockResolvedValue(new Map());
-      await expect(internals.createMultiSeatRegistrationForCombined(dto({ passengerMemberIds: ["", MEMBER_B] }), "u1")).rejects.toThrow(
-        new NotFoundException("找不到信徒"),
-      );
+      await expect(register({ passengerMemberIds: ["", MEMBER_B] })).rejects.toThrow(new NotFoundException("找不到信徒"));
     });
 
-    it("報名者是信徒、同行有信徒也有臨櫃：各自記在正確的欄位，金額只掛在第一筆", async () => {
-      const result = await internals.createMultiSeatRegistrationForCombined(
-        dto({
+    it("報名者是信徒、同行有信徒也有臨櫃：各自記在正確的欄位，金額只掛在第一筆，同一間房", async () => {
+      const ceremony = pilgrimage({ roomTypes: [{ name: "四人房", capacity: 4, fee: 5200, roomCount: 1 }] });
+      registrationRepo.txManager.findOne.mockResolvedValue(ceremony);
+      const result = await register(
+        {
           walkInName: undefined,
           memberId: MEMBER_A,
-          seatIndexes: [1, 2, 5],
+          roomType: "四人房",
+          amount: 5200,
           passengerMemberIds: ["", MEMBER_B, ""],
           passengerNames: ["", "", "  陳小美  "],
           wishText: "平安",
-        }),
-        "u1",
+        },
+        ceremony,
       );
-      const saved = registrationRepo.txManager.save.mock.calls.map(([row]: any) => row);
-      expect(saved.map((r: any) => [r.seatIndex, r.seatNumber, r.memberId, r.walkInName, r.amount, r.wishText])).toEqual([
-        [1, "1-1", MEMBER_A, null, "2000.00", "平安"],
-        [2, "1-2", MEMBER_B, null, "0.00", null],
-        [5, "2-1", null, "陳小美", "0.00", null],
+      expect(savedRows().map((r: any) => [r.memberId, r.walkInName, r.amount, r.wishText, r.roomType, r.roomNumber, r.seatIndex])).toEqual([
+        [MEMBER_A, null, "5200.00", "平安", "四人房", 1, undefined],
+        [MEMBER_B, null, "0.00", null, "四人房", 1, undefined],
+        [null, "陳小美", "0.00", null, "四人房", 1, undefined],
       ]);
       expect(result).toMatchObject({
         payerName: "王小明",
         description: "進香*3人",
-        note: "座位｜1排1號 王小明、1排2號 李大華、2排1號 陳小美",
+        note: "四人房｜王小明、李大華、陳小美",
         templeId: "t1",
       });
     });
 
+    it("雙人房只住 1 人：項目不加「*n人」，備註只印房型", async () => {
+      const result = await register({ passengerMemberIds: undefined, passengerNames: undefined });
+      expect(savedRows()).toHaveLength(1);
+      expect(result).toMatchObject({ description: "進香", note: "雙人房" });
+    });
+
     it("臨櫃同行者沒填姓名（或只填空白）：沿用報名者姓名", async () => {
-      const result = await internals.createMultiSeatRegistrationForCombined(dto({ passengerNames: ["", "   "] }), "u1");
-      expect(registrationRepo.txManager.save.mock.calls[1][0]).toMatchObject({ memberId: null, walkInName: "阿土伯" });
-      expect(result.note).toBe("座位｜1排1號 阿土伯、1排2號 阿土伯");
+      const result = await register({ passengerNames: ["", "   "] });
+      expect(savedRows()[1]).toMatchObject({ memberId: null, walkInName: "阿土伯" });
+      expect(result.note).toBe("雙人房｜阿土伯、阿土伯");
     });
 
-    it("報名者沒有信徒也沒有姓名（或只有空白）：400，不寫入任何座位", async () => {
-      for (const walkInName of [undefined, "", "  "]) {
-        await expect(internals.createMultiSeatRegistrationForCombined(dto({ walkInName }), "u1")).rejects.toThrow(
-          "請選擇信徒或填寫報名者姓名",
-        );
-      }
-      expect(registrationRepo.manager.transaction).not.toHaveBeenCalled();
+    it("第一位的 passengerMemberIds／passengerNames 會被忽略（第一位一定是報名者本人）", async () => {
+      await register({ memberId: MEMBER_A, walkInName: undefined, passengerMemberIds: [MEMBER_B, ""], passengerNames: ["別人", ""] });
+      expect(savedRows()[0]).toMatchObject({ memberId: MEMBER_A });
     });
 
-    it("一般與祭改單人報名也一樣：沒有姓名 400", async () => {
+    it("先鎖住活動再計算；鎖的時候活動已被刪除：404", async () => {
+      await register();
+      expect(registrationRepo.txManager.findOne).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ where: { id: "c1" }, lock: { mode: "pessimistic_write" } }),
+      );
+      registrationRepo.txManager.findOne.mockResolvedValue(null);
+      await expect(register()).rejects.toThrow(new NotFoundException("找不到活動"));
+    });
+
+    it("房號：配給最小的空房號；訂滿 409；間數不限就一直往後配", async () => {
+      registrationRepo.txQb.getRawMany.mockResolvedValueOnce([{ roomType: "雙人房", roomNumber: 1, occupants: "2" }]);
+      await register();
+      expect(savedRows()[0].roomNumber).toBe(2);
+
+      registrationRepo.txQb.getRawMany.mockResolvedValueOnce([
+        { roomType: "雙人房", roomNumber: 1, occupants: "2" },
+        { roomType: "雙人房", roomNumber: 2, occupants: "1" },
+      ]);
+      await expect(register()).rejects.toThrow(new ConflictException("雙人房已訂滿（共 2 間）"));
+
+      const unlimited = pilgrimage({ roomTypes: [{ ...DOUBLE_ROOM, roomCount: null }] });
+      registrationRepo.txQb.getRawMany.mockResolvedValueOnce([
+        { roomType: "雙人房", roomNumber: 1, occupants: "2" },
+        { roomType: "雙人房", roomNumber: 2, occupants: "2" },
+      ]);
+      registrationRepo.txManager.save.mockClear();
+      await register({}, unlimited);
+      expect(savedRows()[0].roomNumber).toBe(3);
+    });
+
+    it("其他房型的房號不影響這個房型", async () => {
+      registrationRepo.txQb.getRawMany.mockResolvedValueOnce([{ roomType: "四人房", roomNumber: 1, occupants: "4" }]);
+      await register();
+      expect(savedRows()[0].roomNumber).toBe(1);
+    });
+
+    it("遊覽車：已報名人數 + 這次人數超過可載人數 409；剛好坐滿可以；沒設台數不檢查", async () => {
+      registrationRepo.txManager.count.mockResolvedValue(39);
+      await expect(register()).rejects.toThrow(new ConflictException("遊覽車座位不足：1 台共 40 位，已報名 39 位，剩 1 位"));
+      await register({ passengerMemberIds: undefined, passengerNames: undefined });
+      expect(savedRows()).toHaveLength(1);
+
+      registrationRepo.txManager.count.mockClear();
+      registrationRepo.txManager.findOne.mockResolvedValue(pilgrimage({ busCount: null }));
+      await register({}, pilgrimage({ busCount: null }));
+      expect(registrationRepo.txManager.count).not.toHaveBeenCalled();
+    });
+
+    it("沒有房型的舊活動：不選房型、不配房號，固定金額依人數計算，多人備註列出參加者", async () => {
+      const legacy = pilgrimage({ roomTypes: null, feeMode: CeremonyFeeMode.FIXED_AMOUNT, fixedAmount: "800.00" });
+      registrationRepo.txManager.findOne.mockResolvedValue(legacy);
+      await expect(register({ roomType: undefined, amount: 800 }, legacy)).rejects.toThrow("此活動為固定金額，2 人應收 NT$ 1600");
+      const result = await register({ roomType: undefined, amount: 1600 }, legacy);
+      expect(result.note).toBe("參加者｜阿土伯、阿土嫂");
+      expect(savedRows().every((r: any) => r.roomType === null && r.roomNumber === null)).toBe(true);
+      expect(registrationRepo.txQb.getRawMany).not.toHaveBeenCalled();
+
+      const single = await register({ roomType: undefined, amount: 800, passengerMemberIds: undefined, passengerNames: undefined }, legacy);
+      expect(single.note).toBeUndefined();
+    });
+
+    it("進香不能走單筆報名：400；一般與祭改單人報名沒有姓名也是 400", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
+      await expect(service.register({ ceremonyId: "c1", amount: 1, walkInName: "甲" } as never, "u1")).rejects.toThrow(
+        "進香請在活動報名頁登錄參加者並選擇房型後送出",
+      );
       ceremonyRepo.findOne.mockResolvedValue(general());
       await expect(service.register({ ceremonyId: "c1", amount: 1 } as never, "u1")).rejects.toThrow("請選擇信徒或填寫報名者姓名");
       ceremonyRepo.findOne.mockResolvedValue(jigai());
@@ -787,25 +981,10 @@ describe("CeremonyService（白箱）", () => {
       ).rejects.toThrow("請選擇信徒或填寫報名者姓名");
     });
 
-    it("第一個座位的 passengerMemberIds／passengerNames 會被忽略（第一位一定是報名者本人）", async () => {
-      await internals.createMultiSeatRegistrationForCombined(
-        dto({ memberId: MEMBER_A, walkInName: undefined, passengerMemberIds: [MEMBER_B, ""], passengerNames: ["別人", ""] }),
-        "u1",
-      );
-      expect(registrationRepo.txManager.save.mock.calls[0][0]).toMatchObject({ memberId: MEMBER_A });
-    });
-
-    it("只有一個座位：項目不加「*n人」，備註用「座位：」開頭", async () => {
-      const result = await internals.createMultiSeatRegistrationForCombined(dto({ seatIndexes: [48] }), "u1");
-      expect(result).toMatchObject({ description: "進香", note: "座位：12排4號" });
-    });
-
-    it("座位被搶走：409；其他錯誤原樣往外丟", async () => {
-      registrationRepo.txManager.save.mockRejectedValueOnce(uniqueViolation());
-      await expect(internals.createMultiSeatRegistrationForCombined(dto(), "u1")).rejects.toThrow("其中有座位已被選走，請重新選擇");
+    it("資料庫錯誤原樣往外丟，不會被當成名額已滿", async () => {
       const dbError = otherDbError();
       registrationRepo.txManager.save.mockRejectedValueOnce(dbError);
-      await expect(internals.createMultiSeatRegistrationForCombined(dto(), "u1")).rejects.toBe(dbError);
+      await expect(register()).rejects.toBe(dbError);
     });
   });
 
@@ -839,13 +1018,11 @@ describe("CeremonyService（白箱）", () => {
       ]);
     });
 
-    it("進香：只回傳真的有座位的 40 格，排號與號碼依每排 4 座換算", async () => {
+    it("進香、祭改不選座位：回傳空陣列", async () => {
       ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
-      const seats = await service.getSeatMap("c1");
-      expect(seats).toHaveLength(40);
-      expect(seats[0]).toMatchObject({ seatIndex: 1, tableNumber: 1, seatInTable: 1 });
-      expect(seats.find((s) => s.seatIndex === 3)).toBeUndefined();
-      expect(seats[seats.length - 1]).toMatchObject({ seatIndex: 48, tableNumber: 12, seatInTable: 4 });
+      expect(await service.getSeatMap("c1")).toEqual([]);
+      ceremonyRepo.findOne.mockResolvedValue(jigai());
+      expect(await service.getSeatMap("c1")).toEqual([]);
     });
   });
 
@@ -865,7 +1042,8 @@ describe("CeremonyService（白箱）", () => {
       expect(result).toEqual({ payerName: "甲", description: "祭改", note: "甲，上午場 3號" });
     });
 
-    it("進香：備註用「排」；一般活動用「桌」；沒有座位就沒有備註", async () => {
+    it("進香：備註印房型；改版前選遊覽車座位的舊資料用「排」；一般活動用「桌」；沒有座位就沒有備註", async () => {
+      expect((await describeWith({ ceremonyId: "c1", walkInName: "甲", roomType: "雙人房", roomNumber: 2 }, pilgrimage())).note).toBe("雙人房");
       expect((await describeWith({ ceremonyId: "c1", walkInName: "甲", seatNumber: "3-2" }, pilgrimage())).note).toBe("座位：3排2號");
       expect((await describeWith({ ceremonyId: "c1", walkInName: "甲", seatNumber: "3-2" })).note).toBe("座位：3桌2號");
       expect((await describeWith({ ceremonyId: "c1", walkInName: "甲", seatNumber: null })).note).toBeUndefined();
