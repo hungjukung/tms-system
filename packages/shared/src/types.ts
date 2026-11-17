@@ -594,7 +594,9 @@ export interface RegisterCeremonyRequest {
   session?: CeremonySession;
   /** 進香：同一位報名者一次選多個座位（多人同行），每個座位各建立一筆報名紀錄 */
   seatIndexes?: number[];
-  /** 進香多人報名：與 seatIndexes 一一對應的乘客姓名，第一個座位是報名者本人，其餘留空則沿用報名者姓名 */
+  /** 進香多人報名：與 seatIndexes 一一對應的同行乘客信徒 id（第一個座位是報名者本人，填空字串；臨櫃乘客也填空字串） */
+  passengerMemberIds?: string[];
+  /** 進香多人報名：與 seatIndexes 一一對應的臨櫃乘客姓名（有選信徒的座位以信徒姓名為準），留空則沿用報名者姓名 */
   passengerNames?: string[];
 }
 

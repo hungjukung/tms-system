@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { isUUID } from "class-validator";
 import { QueryFailedError, Repository } from "typeorm";
 import {
   CeremonyDto,
@@ -365,8 +366,9 @@ export class CeremonyService {
 
   /**
    * 進香多人報名：同一位報名者一次在遊覽車座位圖上選好幾個座位，每個座位各建立一筆報名紀錄。
-   * 第一個座位是報名者本人並掛上全部金額，其餘座位是同行乘客（姓名可另外填，未填就沿用報名者姓名）、金額為 0，
-   * 不會重複計入財務報表或報名者的參與歷史。全部座位包在同一個交易內，任一座位被搶先選走就整批回滾。
+   * 第一個座位是報名者本人並掛上全部金額；其餘座位是同行乘客，可以各自登錄成已建檔信徒（記在該信徒名下），
+   * 或填臨櫃姓名（未填就沿用報名者姓名），金額為 0，不會重複計入財務報表。
+   * 同一位信徒不能在同一筆報名裡出現兩次。全部座位包在同一個交易內，任一座位被搶先選走就整批回滾。
    */
   private async createMultiSeatRegistrationForCombined(
     dto: RegisterCeremonyDto,
@@ -387,14 +389,25 @@ export class CeremonyService {
     for (const seatIndex of seatIndexes) {
       if (!this.isValidSeat(ceremony, seatIndex)) throw new BadRequestException("座位超出範圍");
     }
-    if (dto.memberId) {
-      await this.householdService.findMemberById(dto.memberId);
+    // 每個座位對應的信徒 id：第一個座位是報名者本人，其餘是同行乘客（空字串代表臨櫃、沒有對應信徒）
+    const seatMemberIds = seatIndexes.map((_, i) =>
+      i === 0 ? (dto.memberId ?? "") : (dto.passengerMemberIds?.[i] ?? "").trim(),
+    );
+    const usedMemberIds = seatMemberIds.filter((id) => !!id);
+    if (usedMemberIds.some((id) => !isUUID(id))) throw new BadRequestException("信徒資料錯誤，請重新選擇");
+    if (new Set(usedMemberIds).size !== usedMemberIds.length) {
+      throw new BadRequestException("同一位信徒不能重複報名，請檢查同行乘客");
     }
-    const payerName = dto.memberId
-      ? ((await this.householdService.findMemberByIdOrNull(dto.memberId))?.name ?? "")
-      : (dto.walkInName ?? "");
+    const memberById = await this.householdService.findMembersByIds([...new Set(usedMemberIds)]);
+    if (usedMemberIds.some((id) => !memberById.has(id))) throw new NotFoundException("找不到信徒");
+
+    const payerName = dto.memberId ? (memberById.get(dto.memberId)?.name ?? "") : (dto.walkInName ?? "");
     const passengerNames = seatIndexes.map((_, i) =>
-      i === 0 ? payerName : dto.passengerNames?.[i]?.trim() || payerName,
+      i === 0
+        ? payerName
+        : seatMemberIds[i]
+          ? (memberById.get(seatMemberIds[i])?.name ?? "")
+          : dto.passengerNames?.[i]?.trim() || payerName,
     );
 
     let saved: CeremonyRegistration[];
@@ -407,8 +420,8 @@ export class CeremonyService {
             await manager.save(
               manager.create(CeremonyRegistration, {
                 ceremonyId: dto.ceremonyId,
-                memberId: isMain ? (dto.memberId ?? null) : null,
-                walkInName: isMain ? (dto.walkInName ?? null) : passengerNames[i] || null,
+                memberId: seatMemberIds[i] || null,
+                walkInName: isMain ? (dto.walkInName ?? null) : seatMemberIds[i] ? null : passengerNames[i] || null,
                 walkInAddress: isMain ? (dto.walkInAddress ?? null) : null,
                 amount: isMain ? dto.amount.toFixed(2) : "0.00",
                 wishText: isMain ? (dto.wishText ?? null) : null,

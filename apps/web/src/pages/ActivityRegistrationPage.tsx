@@ -128,6 +128,12 @@ type PendingLanternItem = {
   household?: ClaimHouseholdLanternSlotsRequest;
 };
 
+/** 進香報名的參加者：已建檔信徒（memberId；memberName 只供畫面顯示）或臨櫃香客（name） */
+type PilgrimParticipant = { mode?: "member" | "walkIn"; memberId?: string; memberName?: string; name?: string };
+
+const pilgrimParticipantName = (p?: PilgrimParticipant) =>
+  (p?.mode === "walkIn" ? p?.name?.trim() : p?.memberName) ?? "";
+
 type PendingCeremonyItem = {
   displayLabel: string;
   amount: number;
@@ -710,7 +716,7 @@ function BusSeatModal({
         <Space direction="vertical" style={{ width: "100%" }} size="small">
           <Typography.Text type="secondary">
             {requiredCount != null
-              ? `請點選 ${requiredCount} 個座位，依序對應戶內每一位信徒`
+              ? `請點選 ${requiredCount} 個座位，依點選順序對應每一位參加者`
               : "請點選座位，可一次選多個（多人同行）；第一個點選的座位是報名者本人"}
           </Typography.Text>
           <BusSeatMap seats={seats} chosenSeatIndexes={chosen.map((s) => s.seatIndex)} onSeatClick={toggle} />
@@ -751,6 +757,7 @@ function CeremonyRegistrationFields({
   const session = Form.useWatch("session", form) as CeremonySession | undefined;
   const multiSeatIndexes = Form.useWatch("multiSeatIndexes", form) as number[] | undefined;
   const multiSeatLabels = Form.useWatch("multiSeatLabels", form) as string[] | undefined;
+  const participants = Form.useWatch("participants", form) as PilgrimParticipant[] | undefined;
   const selectedCeremony = ceremonies.find((c) => c.id === ceremonyId);
   const [seatModalOpen, setSeatModalOpen] = useState(false);
   const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
@@ -790,8 +797,9 @@ function CeremonyRegistrationFields({
   const isJigai = selectedCeremony?.kind === CeremonyKind.JIGAI;
   const isPilgrimage = selectedCeremony?.kind === CeremonyKind.PILGRIMAGE;
   const needsSeatPicker = !isJigai && selectedCeremony?.totalSeats != null;
-  // 進香：個人報名（已建檔信徒／臨櫃）可在遊覽車座位圖一次選多個座位，多人同行一起報名
+  // 進香：先登錄所有參加者（每位可以是已建檔信徒或臨櫃香客），再依人數在遊覽車座位圖選相同數量的座位
   const isMultiSeatMode = isPilgrimage && (payerMode === "member" || payerMode === "walkIn");
+  const participantCount = isMultiSeatMode ? (participants?.length ?? 0) : 0;
   // 本次收據已加入、尚未送出的座位，在選位圖上顯示成已有人，避免重複選到
   const reservedSeatIndexes = pendingItems
     .filter((item) => item.request.ceremonyId === ceremonyId)
@@ -819,24 +827,39 @@ function CeremonyRegistrationFields({
     if ((!needsSeatPicker || isPilgrimage) && payerMode === "table") {
       form.setFieldValue("payerMode", "member");
     }
+    // 進香的參加者名單本身就能登錄臨櫃香客，不需要另外的「臨櫃香客」報名者類型
+    if (isPilgrimage && payerMode === "walkIn") {
+      form.setFieldValue("payerMode", "member");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needsSeatPicker, isPilgrimage, payerMode]);
 
-  // 進香多人報名 + 固定金額：金額自動算成「單價 x 選位人數」
+  // 進香 + 固定金額：金額自動算成「單價 x 參加人數」
   useEffect(() => {
     if (isMultiSeatMode && selectedCeremony?.feeMode === CeremonyFeeMode.FIXED_AMOUNT) {
-      form.setFieldValue("amount", (selectedCeremony.fixedAmount ?? 0) * Math.max(multiSeatIndexes?.length ?? 0, 1));
+      form.setFieldValue("amount", (selectedCeremony.fixedAmount ?? 0) * Math.max(participantCount, 1));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMultiSeatMode, multiSeatIndexes, selectedCeremony]);
+  }, [isMultiSeatMode, participantCount, selectedCeremony]);
+
+  // 參加人數變了，原本選的座位數就對不上，清空讓報名者重新選位
+  useEffect(() => {
+    if ((multiSeatIndexes?.length ?? 0) > 0 && multiSeatIndexes!.length !== participantCount) {
+      form.setFieldValue("multiSeatIndexes", undefined);
+      form.setFieldValue("multiSeatLabels", undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participantCount]);
 
   const readyToAdd =
     !!ceremonyId &&
     (payerMode === "household"
       ? !!householdId && headcount > 0
-      : payerMode === "walkIn"
-        ? !!walkInName
-        : !!memberId) &&
+      : isMultiSeatMode
+        ? participantCount > 0
+        : payerMode === "walkIn"
+          ? !!walkInName
+          : !!memberId) &&
     (isJigai ? !!session : true) &&
     (!needsSeatPicker
       ? true
@@ -845,7 +868,7 @@ function CeremonyRegistrationFields({
         : payerMode === "table"
           ? !!tableNumber
           : isMultiSeatMode
-            ? (multiSeatIndexes?.length ?? 0) > 0
+            ? (multiSeatIndexes?.length ?? 0) === participantCount
             : canSkipSeat && noSeatNeeded
             ? true
             : !!seatIndex);
@@ -856,11 +879,39 @@ function CeremonyRegistrationFields({
    */
   const handleAdd = async () => {
     const values = await form.validateFields();
+    // 進香：參加者名單依序對應選好的座位，第 1 位是收據上的報名者，其餘是同行參加者
+    const plist = (isMultiSeatMode ? (values.participants ?? []) : []) as PilgrimParticipant[];
+    const isWalkIn = (pt?: PilgrimParticipant) => pt?.mode === "walkIn";
+    if (isMultiSeatMode) {
+      const seatCount = (values.multiSeatIndexes as number[] | undefined)?.length ?? 0;
+      if (seatCount !== plist.length) {
+        message.error(`參加者共 ${plist.length} 位，請重新選擇 ${plist.length} 個座位`);
+        return;
+      }
+      const memberIds = plist.filter((pt) => !isWalkIn(pt)).map((pt) => pt.memberId as string);
+      if (new Set(memberIds).size !== memberIds.length) {
+        message.error("同一位信徒不能重複登錄，請檢查參加者名單");
+        return;
+      }
+    }
+    const first = plist[0];
     const request: RegisterCeremonyRequest = {
       ceremonyId: values.ceremonyId,
-      memberId: values.payerMode === "member" || values.payerMode === "table" ? values.memberId : undefined,
-      walkInName: values.payerMode === "walkIn" ? values.walkInName : undefined,
-      walkInAddress: values.payerMode === "walkIn" ? values.walkInAddress : undefined,
+      memberId: isMultiSeatMode
+        ? isWalkIn(first)
+          ? undefined
+          : first?.memberId
+        : values.payerMode === "member" || values.payerMode === "table"
+          ? values.memberId
+          : undefined,
+      walkInName: isMultiSeatMode
+        ? isWalkIn(first)
+          ? first?.name?.trim()
+          : undefined
+        : values.payerMode === "walkIn"
+          ? values.walkInName
+          : undefined,
+      walkInAddress: !isMultiSeatMode && values.payerMode === "walkIn" ? values.walkInAddress : undefined,
       householdId: values.payerMode === "household" ? values.householdId : undefined,
       householdSeatIndexes: values.payerMode === "household" ? values.householdSeatIndexes : undefined,
       amount: values.amount,
@@ -868,8 +919,11 @@ function CeremonyRegistrationFields({
       seatIndex:
         values.payerMode === "household" || values.payerMode === "table" || isMultiSeatMode ? undefined : values.seatIndex,
       seatIndexes: isMultiSeatMode ? values.multiSeatIndexes : undefined,
+      passengerMemberIds: isMultiSeatMode
+        ? plist.map((pt, i) => (i === 0 || isWalkIn(pt) ? "" : (pt.memberId ?? "")))
+        : undefined,
       passengerNames: isMultiSeatMode
-        ? (values.multiSeatIndexes as number[]).map((_, i) => (i === 0 ? "" : (values.passengerNames?.[i] ?? "").trim()))
+        ? plist.map((pt, i) => (i === 0 || !isWalkIn(pt) ? "" : (pt.name ?? "").trim()))
         : undefined,
       tableNumber: values.payerMode === "table" ? values.tableNumber : undefined,
       noSeatNeeded:
@@ -885,14 +939,10 @@ function CeremonyRegistrationFields({
       const names = householdMembersQuery.data?.map((m) => m.name).join("、") ?? "";
       displayLabel = `${ceremonyName}（整戶 ${names}${householdSeatLabel ? `　${householdSeatLabel}` : ""}）`;
     } else if (isMultiSeatMode) {
-      const payerName = values.payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
       const seatsText = (multiSeatLabels ?? [])
-        .map((label, i) => {
-          const passenger = i === 0 ? "" : (values.passengerNames?.[i] ?? "").trim();
-          return passenger ? `${label} ${passenger}` : label;
-        })
+        .map((label, i) => `${pilgrimParticipantName(plist[i])} ${label}`.trim())
         .join("、");
-      displayLabel = `${ceremonyName}（${payerName}　${seatsText}）`;
+      displayLabel = `${ceremonyName}（${seatsText}）`;
     } else {
       const payerName = values.payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
       displayLabel = `${ceremonyName}（${payerName}${
@@ -917,7 +967,11 @@ function CeremonyRegistrationFields({
         content: (
           <div style={{ textAlign: "center", padding: "16px 0" }}>
             <div style={{ fontSize: 12, color: "#888" }}>遊覽車座位（{multiSeatLabels.length} 位）</div>
-            <div style={{ fontSize: 28, fontWeight: "bold", color: "#a8071a" }}>{multiSeatLabels.join("、")}</div>
+            {multiSeatLabels.map((label, i) => (
+              <div key={label} style={{ fontSize: 22, fontWeight: "bold", color: "#a8071a" }}>
+                {label}　{pilgrimParticipantName(plist[i])}
+              </div>
+            ))}
           </div>
         ),
       });
@@ -957,7 +1011,7 @@ function CeremonyRegistrationFields({
       session: undefined,
       multiSeatIndexes: undefined,
       multiSeatLabels: undefined,
-      passengerNames: undefined,
+      participants: [{ mode: "member" }],
     });
     setSelectedMemberName(undefined);
   };
@@ -998,7 +1052,6 @@ function CeremonyRegistrationFields({
               form.setFieldValue("session", undefined);
               form.setFieldValue("multiSeatIndexes", undefined);
               form.setFieldValue("multiSeatLabels", undefined);
-              form.setFieldValue("passengerNames", undefined);
               form.setFieldValue("householdSeatIndexes", undefined);
               form.setFieldValue("householdSeatLabel", undefined);
             }}
@@ -1024,13 +1077,79 @@ function CeremonyRegistrationFields({
         )}
         <Form.Item label="報名者類型" name="payerMode" initialValue="member">
           <Radio.Group>
-            <Radio.Button value="member">已建檔信徒</Radio.Button>
-            <Radio.Button value="walkIn">臨櫃香客（免建檔）</Radio.Button>
+            <Radio.Button value="member">{isPilgrimage ? "登錄參加者（可多人）" : "已建檔信徒"}</Radio.Button>
+            {!isPilgrimage && <Radio.Button value="walkIn">臨櫃香客（免建檔）</Radio.Button>}
             <Radio.Button value="household">整戶報名</Radio.Button>
             {needsSeatPicker && !isPilgrimage && <Radio.Button value="table">認領整桌</Radio.Button>}
           </Radio.Group>
         </Form.Item>
-        {payerMode === "member" || payerMode === "table" ? (
+        {isMultiSeatMode ? (
+          <Form.List name="participants" initialValue={[{ mode: "member" }]}>
+            {(fields, { add, remove }) => (
+              <Form.Item label={`參加者（共 ${fields.length} 位，第 1 位是收據上的報名者）`} required>
+                <Space direction="vertical" style={{ width: "100%" }}>
+                  {fields.map((field, index) => {
+                    const mode = participants?.[field.name]?.mode ?? "member";
+                    const seat = multiSeatLabels?.[index];
+                    return (
+                      <Card
+                        key={field.key}
+                        size="small"
+                        title={`參加者 ${index + 1}${index === 0 ? "（報名者）" : ""}${seat ? `　座位 ${seat}` : ""}`}
+                        extra={
+                          fields.length > 1 && (
+                            <Button size="small" danger onClick={() => remove(field.name)}>
+                              移除
+                            </Button>
+                          )
+                        }
+                      >
+                        <Form.Item name={[field.name, "mode"]} initialValue="member" style={{ marginBottom: 8 }}>
+                          <Radio.Group
+                            size="small"
+                            optionType="button"
+                            options={[
+                              { label: "已建檔信徒", value: "member" },
+                              { label: "臨櫃香客", value: "walkIn" },
+                            ]}
+                          />
+                        </Form.Item>
+                        {mode === "walkIn" ? (
+                          <Form.Item
+                            name={[field.name, "name"]}
+                            rules={[{ required: true, whitespace: true, message: "請輸入姓名" }]}
+                            style={{ marginBottom: 0 }}
+                          >
+                            <Input placeholder="姓名" />
+                          </Form.Item>
+                        ) : (
+                          <Form.Item
+                            name={[field.name, "memberId"]}
+                            rules={[{ required: true, message: "請選擇信徒" }]}
+                            style={{ marginBottom: 0 }}
+                          >
+                            <MemberSelect
+                              style={{ width: "100%" }}
+                              onSelectMember={(m) =>
+                                form.setFieldValue(["participants", field.name, "memberName"], m?.name)
+                              }
+                            />
+                          </Form.Item>
+                        )}
+                        <Form.Item name={[field.name, "memberName"]} hidden>
+                          <Input />
+                        </Form.Item>
+                      </Card>
+                    );
+                  })}
+                  <Button type="dashed" block onClick={() => add({ mode: "member" })}>
+                    ＋ 新增參加者
+                  </Button>
+                </Space>
+              </Form.Item>
+            )}
+          </Form.List>
+        ) : payerMode === "member" || payerMode === "table" ? (
           <Form.Item label="信徒" name="memberId" rules={[{ required: true, message: "請選擇信徒" }]}>
             <MemberSelect onSelectMember={(m) => setSelectedMemberName(m?.name)} />
           </Form.Item>
@@ -1078,14 +1197,14 @@ function CeremonyRegistrationFields({
                 : payerMode === "table"
                   ? `此活動為固定金額，已自動算成單價 x 每桌 ${selectedCeremony.seatsPerTable ?? "?"} 人`
                   : isMultiSeatMode
-                    ? `此活動為固定金額，已自動算成單價 x ${multiSeatIndexes?.length || 1} 人`
+                    ? `此活動為固定金額，已自動算成單價 x ${participantCount || 1} 人`
                     : "此活動為固定金額"
               : payerMode === "household"
                 ? "隨喜金額，請直接輸入整戶合計金額"
                 : payerMode === "table"
                   ? "隨喜金額，請直接輸入整桌合計金額"
-                  : isMultiSeatMode && (multiSeatIndexes?.length ?? 0) > 1
-                    ? "隨喜金額，請直接輸入同行全部人數的合計金額"
+                  : isMultiSeatMode && participantCount > 1
+                    ? "隨喜金額，請直接輸入全部參加者的合計金額"
                     : "隨喜金額，可自行輸入"
           }
         >
@@ -1136,7 +1255,7 @@ function CeremonyRegistrationFields({
                 {isMultiSeatMode
                   ? multiSeatIndexes?.length
                     ? "重新選擇座位"
-                    : "選擇遊覽車座位（可多選）"
+                    : `選擇遊覽車座位（需選 ${participantCount} 位）`
                   : payerMode === "table"
                   ? tableNumber
                     ? "重新選擇桌次"
@@ -1150,7 +1269,14 @@ function CeremonyRegistrationFields({
                       : "選擇座位"}
               </Button>
               {isMultiSeatMode
-                ? !!multiSeatLabels?.length && <Tag color="green">已選 {multiSeatLabels.length} 位：{multiSeatLabels.join("、")}</Tag>
+                ? !!multiSeatLabels?.length && (
+                    <Tag color="green">
+                      已選 {multiSeatLabels.length} 位：
+                      {multiSeatLabels
+                        .map((label, i) => `${label} ${pilgrimParticipantName(participants?.[i])}`.trim())
+                        .join("、")}
+                    </Tag>
+                  )
                 : payerMode === "table"
                 ? tableLabel && <Tag color="green">已選 {tableLabel}</Tag>
                 : payerMode === "household"
@@ -1159,12 +1285,6 @@ function CeremonyRegistrationFields({
             </Space>
           </Form.Item>
         )}
-        {isMultiSeatMode &&
-          (multiSeatLabels ?? []).slice(1).map((label, i) => (
-            <Form.Item key={label} label={`同行乘客姓名（${label}）`} name={["passengerNames", i + 1]}>
-              <Input placeholder="選填，未填則沿用報名者姓名" />
-            </Form.Item>
-          ))}
       </Form>
 
       {showSeatPicker && isPilgrimage && (
@@ -1173,7 +1293,7 @@ function CeremonyRegistrationFields({
           onClose={() => setSeatModalOpen(false)}
           ceremonyId={selectedCeremony!.id}
           ceremonyName={selectedCeremony!.name}
-          requiredCount={payerMode === "household" ? headcount : undefined}
+          requiredCount={payerMode === "household" ? headcount : participantCount}
           reservedSeatIndexes={reservedSeatIndexes}
           onConfirm={(seats) => {
             const labels = seats.map(busSeatLabel);
@@ -1183,7 +1303,6 @@ function CeremonyRegistrationFields({
             } else {
               form.setFieldValue("multiSeatIndexes", seats.map((s) => s.seatIndex));
               form.setFieldValue("multiSeatLabels", labels);
-              form.setFieldValue("passengerNames", undefined);
             }
             setSeatModalOpen(false);
           }}

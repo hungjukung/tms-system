@@ -62,6 +62,12 @@ export class RegisterCeremonyDto {
   @Min(1, { each: true })
   seatIndexes?: number[];
 
+  /** 與 seatIndexes 一一對應的同行乘客信徒 id，沒有對應信徒的座位填空字串（格式在 service 內另行檢查） */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  passengerMemberIds?: string[];
+
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
