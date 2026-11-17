@@ -1,5 +1,22 @@
 import { CeremonyFeeMode, CeremonyKind } from "@tms/shared";
-import { IsDateString, IsEnum, IsInt, IsNumber, IsOptional, IsPositive, IsString, IsUUID, Min } from "class-validator";
+import { Type } from "class-transformer";
+import { IsArray, IsDateString, IsEnum, IsInt, IsNumber, IsOptional, IsPositive, IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from "class-validator";
+
+export class RoomTypeDto {
+  @IsString()
+  @MaxLength(30)
+  name: string;
+
+  @IsInt()
+  @IsPositive()
+  @Max(45)
+  capacity: number;
+
+  @IsNumber()
+  @Min(0)
+  fee: number;
+}
+
 
 export class CreateCeremonyDto {
   @IsUUID()
@@ -50,4 +67,10 @@ export class CreateCeremonyDto {
   @IsInt()
   @IsPositive()
   afternoonCapacity?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RoomTypeDto)
+  roomTypes?: RoomTypeDto[];
 }

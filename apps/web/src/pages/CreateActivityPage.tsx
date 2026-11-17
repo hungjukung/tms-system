@@ -69,7 +69,7 @@ import { joinLanternType, splitLanternType } from "../utils/lanternType";
 type ActivityType = "ceremony" | "jigai" | "pilgrimage" | "lanternWall";
 
 const activityTypeOptions: { label: string; value: ActivityType }[] = [
-  { label: "活動", value: "ceremony" },
+  { label: "餐會", value: "ceremony" },
   { label: "祭改", value: "jigai" },
   { label: "進香", value: "pilgrimage" },
   { label: "點燈牆", value: "lanternWall" },
@@ -116,7 +116,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
       <Form
         form={form}
         layout="vertical"
-        initialValues={{ feeMode: CeremonyFeeMode.FREE_WILL, date: dayjs() }}
+        initialValues={{ feeMode: CeremonyFeeMode.FREE_WILL, date: dayjs(), roomTypes: isPilgrimage ? [{}] : undefined }}
         onFinish={(values) =>
           mutation.mutate({
             templeId,
@@ -133,6 +133,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
             registrationDeadline: values.registrationDeadline
               ? (values.registrationDeadline as Dayjs).format("YYYY-MM-DD")
               : undefined,
+            roomTypes: isPilgrimage ? values.roomTypes : undefined,
           })
         }
       >
@@ -148,6 +149,10 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
         >
           <DatePicker style={{ width: "100%" }} placeholder="不填則不設限" />
         </Form.Item>
+        {!isPilgrimage && (
+          <>
+        {!isPilgrimage && (
+          <>
         <Form.Item label="收費方式" name="feeMode">
           <Radio.Group>
             <Radio.Button value={CeremonyFeeMode.FREE_WILL}>隨喜</Radio.Button>
@@ -158,6 +163,68 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
           <Form.Item label="固定金額" name="fixedAmount" rules={[{ required: true }]}>
             <InputNumber style={{ width: "100%" }} min={0} />
           </Form.Item>
+        )}
+          </>
+        )}
+        {isPilgrimage && (
+          <Form.List name="roomTypes">
+            {(fields, { add, remove }) => (
+              <Form.Item label="房型與費用（報名時選房型，登錄人數須等於房型人數，費用為整間房總價）" required>
+                <Space direction="vertical" style={{ width: "100%" }}>
+                  {fields.map((field) => (
+                    <Space key={field.key} align="baseline" wrap>
+                      <Form.Item name={[field.name, "name"]} rules={[{ required: true, message: "請輸入房型名稱" }]} noStyle>
+                        <Input placeholder="房型，例如：雙人房" style={{ width: 150 }} maxLength={30} />
+                      </Form.Item>
+                      <Form.Item name={[field.name, "capacity"]} rules={[{ required: true, message: "請輸入人數" }]} noStyle>
+                        <InputNumber placeholder="人數" min={1} max={45} addonAfter="人" style={{ width: 110 }} />
+                      </Form.Item>
+                      <Form.Item name={[field.name, "fee"]} rules={[{ required: true, message: "請輸入費用" }]} noStyle>
+                        <InputNumber placeholder="費用" min={0} addonBefore="NT$" style={{ width: 150 }} />
+                      </Form.Item>
+                      <Button danger size="small" onClick={() => remove(field.name)}>
+                        刪除
+                      </Button>
+                    </Space>
+                  ))}
+                  <Button type="dashed" block onClick={() => add({})}>
+                    ＋ 新增房型
+                  </Button>
+                </Space>
+              </Form.Item>
+            )}
+          </Form.List>
+        )}
+          </>
+        )}
+        {isPilgrimage && (
+          <Form.List name="roomTypes">
+            {(fields, { add, remove }) => (
+              <Form.Item label="房型與費用（報名時選房型，登錄人數須等於房型人數，費用為整間房總價）" required>
+                <Space direction="vertical" style={{ width: "100%" }}>
+                  {fields.map((field) => (
+                    <Space key={field.key} align="baseline" wrap>
+                      <Form.Item name={[field.name, "name"]} rules={[{ required: true, message: "請輸入房型名稱" }]} noStyle>
+                        <Input placeholder="房型，例如：雙人房" style={{ width: 150 }} maxLength={30} />
+                      </Form.Item>
+                      <Form.Item name={[field.name, "capacity"]} rules={[{ required: true, message: "請輸入人數" }]} noStyle>
+                        <InputNumber placeholder="人數" min={1} max={45} addonAfter="人" style={{ width: 110 }} />
+                      </Form.Item>
+                      <Form.Item name={[field.name, "fee"]} rules={[{ required: true, message: "請輸入費用" }]} noStyle>
+                        <InputNumber placeholder="費用" min={0} addonBefore="NT$" style={{ width: 150 }} />
+                      </Form.Item>
+                      <Button danger size="small" onClick={() => remove(field.name)}>
+                        刪除
+                      </Button>
+                    </Space>
+                  ))}
+                  <Button type="dashed" block onClick={() => add({})}>
+                    ＋ 新增房型
+                  </Button>
+                </Space>
+              </Form.Item>
+            )}
+          </Form.List>
         )}
         <Form.Item label="說明" name="description">
           <Input.TextArea rows={2} />
@@ -182,7 +249,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
           <Alert
             type="info"
             style={{ marginBottom: 16 }}
-            message={`報名時在遊覽車座位圖上點選座位（共 ${PILGRIMAGE_BUS_SEAT_COUNT} 座），可一次為多人選位，已被選走的座位會變色`}
+            message={`報名時先選房型，登錄與房型相同人數的參加者，再在遊覽車座位圖上點選座位（共 ${PILGRIMAGE_BUS_SEAT_COUNT} 座），已被選走的座位會變色`}
           />
         ) : (
           <Space.Compact block>
@@ -217,6 +284,7 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
   const hasRegistrations = ceremony.registrationCount > 0;
   const isJigai = ceremony.kind === CeremonyKind.JIGAI;
   const usesTables = ceremony.kind === CeremonyKind.GENERAL;
+  const isPilgrimage = ceremony.kind === CeremonyKind.PILGRIMAGE;
 
   const mutation = useMutation({
     mutationFn: (values: Parameters<typeof updateCeremony>[1]) => updateCeremony(ceremony.id, values),
@@ -246,13 +314,18 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
           morningCapacity: ceremony.morningCapacity ?? undefined,
           afternoonCapacity: ceremony.afternoonCapacity ?? undefined,
           registrationDeadline: ceremony.registrationDeadline ? dayjs(ceremony.registrationDeadline) : undefined,
+          roomTypes: ceremony.roomTypes ?? undefined,
         }}
         onFinish={(values) =>
           mutation.mutate({
             name: values.name,
             date: (values.date as Dayjs).format("YYYY-MM-DD"),
-            feeMode: values.feeMode,
-            fixedAmount: values.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? values.fixedAmount : null,
+            ...(isPilgrimage
+              ? { roomTypes: values.roomTypes }
+              : {
+                  feeMode: values.feeMode,
+                  fixedAmount: values.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? values.fixedAmount : null,
+                }),
             description: values.description || null,
             ...(isJigai
               ? { morningCapacity: values.morningCapacity, afternoonCapacity: values.afternoonCapacity }

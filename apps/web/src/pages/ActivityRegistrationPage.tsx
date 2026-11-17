@@ -758,6 +758,7 @@ function CeremonyRegistrationFields({
   const multiSeatIndexes = Form.useWatch("multiSeatIndexes", form) as number[] | undefined;
   const multiSeatLabels = Form.useWatch("multiSeatLabels", form) as string[] | undefined;
   const participants = Form.useWatch("participants", form) as PilgrimParticipant[] | undefined;
+  const roomTypeName = Form.useWatch("roomType", form) as string | undefined;
   const selectedCeremony = ceremonies.find((c) => c.id === ceremonyId);
   const [seatModalOpen, setSeatModalOpen] = useState(false);
   const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
@@ -796,6 +797,9 @@ function CeremonyRegistrationFields({
 
   const isJigai = selectedCeremony?.kind === CeremonyKind.JIGAI;
   const isPilgrimage = selectedCeremony?.kind === CeremonyKind.PILGRIMAGE;
+  const roomTypes = isPilgrimage ? (selectedCeremony?.roomTypes ?? []) : [];
+  const hasRooms = roomTypes.length > 0;
+  const selectedRoom = roomTypes.find((r) => r.name === roomTypeName);
   const needsSeatPicker = !isJigai && selectedCeremony?.totalSeats != null;
   // 進香：先登錄所有參加者（每位可以是已建檔信徒或臨櫃香客），再依人數在遊覽車座位圖選相同數量的座位
   const isMultiSeatMode = isPilgrimage && (payerMode === "member" || payerMode === "walkIn");
@@ -836,11 +840,28 @@ function CeremonyRegistrationFields({
 
   // 進香 + 固定金額：金額自動算成「單價 x 參加人數」
   useEffect(() => {
-    if (isMultiSeatMode && selectedCeremony?.feeMode === CeremonyFeeMode.FIXED_AMOUNT) {
+    if (isMultiSeatMode && !hasRooms && selectedCeremony?.feeMode === CeremonyFeeMode.FIXED_AMOUNT) {
       form.setFieldValue("amount", (selectedCeremony.fixedAmount ?? 0) * Math.max(participantCount, 1));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMultiSeatMode, participantCount, selectedCeremony]);
+
+  // 進香房型：選了房型就自動帶入房型費用，並把參加者名單調整成房型人數
+  useEffect(() => {
+    if (!isMultiSeatMode || !hasRooms) return;
+    if (!selectedRoom) {
+      form.setFieldValue("amount", undefined);
+      return;
+    }
+    form.setFieldValue("amount", selectedRoom.fee);
+    const current = (form.getFieldValue("participants") ?? []) as PilgrimParticipant[];
+    if (current.length !== selectedRoom.capacity) {
+      const next = current.slice(0, selectedRoom.capacity);
+      while (next.length < selectedRoom.capacity) next.push({ mode: "member" } as PilgrimParticipant);
+      form.setFieldValue("participants", next);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMultiSeatMode, hasRooms, selectedRoom]);
 
   // 參加人數變了，原本選的座位數就對不上，清空讓報名者重新選位
   useEffect(() => {
@@ -882,6 +903,16 @@ function CeremonyRegistrationFields({
     // 進香：參加者名單依序對應選好的座位，第 1 位是收據上的報名者，其餘是同行參加者
     const plist = (isMultiSeatMode ? (values.participants ?? []) : []) as PilgrimParticipant[];
     const isWalkIn = (pt?: PilgrimParticipant) => pt?.mode === "walkIn";
+    if (isMultiSeatMode && hasRooms) {
+      if (!selectedRoom) {
+        message.error("請選擇房型");
+        return;
+      }
+      if (plist.length !== selectedRoom.capacity) {
+        message.error(`${selectedRoom.name}需登錄 ${selectedRoom.capacity} 位參加者，目前為 ${plist.length} 位`);
+        return;
+      }
+    }
     if (isMultiSeatMode) {
       const seatCount = (values.multiSeatIndexes as number[] | undefined)?.length ?? 0;
       if (seatCount !== plist.length) {
@@ -929,6 +960,7 @@ function CeremonyRegistrationFields({
       noSeatNeeded:
         (values.payerMode === "member" || values.payerMode === "walkIn") && values.noSeatNeeded ? true : undefined,
       session: isJigai ? values.session : undefined,
+      roomType: isMultiSeatMode && hasRooms ? roomTypeName : undefined,
     };
 
     const ceremonyName = selectedCeremony?.name ?? "";
@@ -942,7 +974,7 @@ function CeremonyRegistrationFields({
       const seatsText = (multiSeatLabels ?? [])
         .map((label, i) => `${pilgrimParticipantName(plist[i])} ${label}`.trim())
         .join("、");
-      displayLabel = `${ceremonyName}（${seatsText}）`;
+      displayLabel = `${ceremonyName}（${selectedRoom ? `${selectedRoom.name}　` : ""}${seatsText}）`;
     } else {
       const payerName = values.payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
       displayLabel = `${ceremonyName}（${payerName}${
@@ -1012,6 +1044,7 @@ function CeremonyRegistrationFields({
       multiSeatIndexes: undefined,
       multiSeatLabels: undefined,
       participants: [{ mode: "member" }],
+      roomType: undefined,
     });
     setSelectedMemberName(undefined);
   };
@@ -1029,7 +1062,7 @@ function CeremonyRegistrationFields({
             placeholder="請選擇活動"
             options={ceremonies.map((c) => ({
               value: c.id,
-              label: `${c.name}（${c.date}，${feeModeLabel[c.feeMode]}）${
+              label: `${c.name}（${c.date}，${c.roomTypes?.length ? "依房型" : feeModeLabel[c.feeMode]}）${
                 c.kind === CeremonyKind.JIGAI
                   ? `　上午 ${c.morningRegistered}/${c.morningCapacity}　下午 ${c.afternoonRegistered}/${c.afternoonCapacity}`
                   : c.totalSeats
@@ -1050,6 +1083,7 @@ function CeremonyRegistrationFields({
               form.setFieldValue("tableNumber", undefined);
               form.setFieldValue("tableLabel", undefined);
               form.setFieldValue("session", undefined);
+              form.setFieldValue("roomType", undefined);
               form.setFieldValue("multiSeatIndexes", undefined);
               form.setFieldValue("multiSeatLabels", undefined);
               form.setFieldValue("householdSeatIndexes", undefined);
@@ -1057,6 +1091,17 @@ function CeremonyRegistrationFields({
             }}
           />
         </Form.Item>
+        {isPilgrimage && hasRooms && (
+          <Form.Item label="房型" name="roomType" rules={[{ required: true, message: "請選擇房型" }]}>
+            <Select
+              placeholder="請選擇房型"
+              options={roomTypes.map((r) => ({
+                value: r.name,
+                label: `${r.name}（${r.capacity} 人，NT$ ${r.fee}）`,
+              }))}
+            />
+          </Form.Item>
+        )}
         {isJigai && selectedCeremony && (
           <Form.Item label="場次" name="session" rules={[{ required: true, message: "請選擇場次" }]}>
             <Radio.Group>
@@ -1097,7 +1142,7 @@ function CeremonyRegistrationFields({
                         size="small"
                         title={`參加者 ${index + 1}${index === 0 ? "（報名者）" : ""}${seat ? `　座位 ${seat}` : ""}`}
                         extra={
-                          fields.length > 1 && (
+                          fields.length > 1 && !hasRooms && (
                             <Button size="small" danger onClick={() => remove(field.name)}>
                               移除
                             </Button>
@@ -1142,9 +1187,17 @@ function CeremonyRegistrationFields({
                       </Card>
                     );
                   })}
-                  <Button type="dashed" block onClick={() => add({ mode: "member" })}>
-                    ＋ 新增參加者
-                  </Button>
+                  {hasRooms ? (
+                    <Typography.Text type="secondary">
+                      {selectedRoom
+                        ? `${selectedRoom.name}固定 ${selectedRoom.capacity} 位參加者`
+                        : "請先選擇房型，參加者人數會依房型自動帶入"}
+                    </Typography.Text>
+                  ) : (
+                    <Button type="dashed" block onClick={() => add({ mode: "member" })}>
+                      ＋ 新增參加者
+                    </Button>
+                  )}
                 </Space>
               </Form.Item>
             )}
@@ -1191,12 +1244,16 @@ function CeremonyRegistrationFields({
           name="amount"
           rules={[{ required: true }]}
           extra={
-            selectedCeremony?.feeMode === CeremonyFeeMode.FIXED_AMOUNT
+            hasRooms
+              ? selectedRoom
+                ? `${selectedRoom.name}費用（整間房）`
+                : "請先選擇房型"
+              : selectedCeremony?.feeMode === CeremonyFeeMode.FIXED_AMOUNT
               ? payerMode === "household"
                 ? `此活動為固定金額，已自動算成單價 x ${headcount || "?"} 人`
                 : payerMode === "table"
                   ? `此活動為固定金額，已自動算成單價 x 每桌 ${selectedCeremony.seatsPerTable ?? "?"} 人`
-                  : isMultiSeatMode
+                  : isMultiSeatMode && !hasRooms
                     ? `此活動為固定金額，已自動算成單價 x ${participantCount || 1} 人`
                     : "此活動為固定金額"
               : payerMode === "household"
@@ -1211,7 +1268,7 @@ function CeremonyRegistrationFields({
           <InputNumber
             style={{ width: "100%" }}
             min={0}
-            disabled={selectedCeremony?.feeMode === CeremonyFeeMode.FIXED_AMOUNT}
+            disabled={selectedCeremony?.feeMode === CeremonyFeeMode.FIXED_AMOUNT || hasRooms}
           />
         </Form.Item>
         <Form.Item name="seatIndex" hidden>

@@ -499,6 +499,13 @@ export interface CeremonyExpenseDto {
   occurredAt: string;
 }
 
+/** 進香房型：每個房型有固定入住人數與費用（整間房的總價） */
+export interface PilgrimageRoomType {
+  name: string;
+  capacity: number;
+  fee: number;
+}
+
 export interface CeremonyDto {
   id: string;
   templeId: string;
@@ -520,6 +527,8 @@ export interface CeremonyDto {
   afternoonRegistered: number;
   /** 報名期限：超過此日期後，此活動會從「活動報名」頁的選單隱藏 */
   registrationDeadline: string | null;
+  /** 進香：房型清單（名稱、人數、費用）；沒設定房型時為 null */
+  roomTypes: PilgrimageRoomType[] | null;
   /** 供「建立活動」頁列表顯示：此活動至今累積的報名筆數與收款總額 */
   registrationCount: number;
   totalAmount: number;
@@ -538,6 +547,7 @@ export interface CreateCeremonyRequest {
   kind?: CeremonyKind;
   morningCapacity?: number;
   afternoonCapacity?: number;
+  roomTypes?: PilgrimageRoomType[];
 }
 
 export interface UpdateCeremonyRequest {
@@ -551,6 +561,7 @@ export interface UpdateCeremonyRequest {
   registrationDeadline?: string | null;
   morningCapacity?: number | null;
   afternoonCapacity?: number | null;
+  roomTypes?: PilgrimageRoomType[] | null;
 }
 
 export interface CeremonyRegistrationDto {
@@ -581,6 +592,8 @@ export interface RegisterCeremonyRequest {
   /** 整戶報名：提供此欄位時，會為該戶籍下每一位信徒各自建立一筆報名紀錄 */
   householdId?: string;
   amount: number;
+  /** 進香：所選房型名稱（活動有設定房型時必填） */
+  roomType?: string;
   wishText?: string;
   /** 手動選位時指定的座位流水號（1 起算）；未提供時由系統依序自動配發 */
   seatIndex?: number;

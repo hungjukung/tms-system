@@ -74,4 +74,9 @@ export class RegisterCeremonyDto {
   @IsString({ each: true })
   @MaxLength(50, { each: true })
   passengerNames?: string[];
+
+  /** 進香：所選房型名稱（活動有設定房型時必填） */
+  @IsOptional()
+  @IsString()
+  roomType?: string;
 }

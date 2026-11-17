@@ -616,6 +616,64 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       await submitRegistrations([{ ceremonyId: c.id, walkInName: "甲", amount: 1, tableNumber: 1 }]).expect(400);
     });
 
+    describe("房型與費用", () => {
+      const rooms = [
+        { name: "雙人房", capacity: 2, fee: 3000 },
+        { name: "四人房", capacity: 4, fee: 5200 },
+      ];
+
+      it("建立時帶房型，回傳房型清單；非進香活動會忽略房型", async () => {
+        const c = await createPilgrimage({ roomTypes: rooms });
+        expect(c.roomTypes).toEqual(rooms);
+        const general = await createCeremony({ roomTypes: rooms });
+        expect(general.roomTypes).toBeNull();
+      });
+
+      it("房型名稱不可重複、不可空白；人數與費用要合法", async () => {
+        const post = (roomTypes: unknown) =>
+          director.post("/ceremony/ceremonies", {
+            templeId: fx.templeId,
+            name: "進香",
+            date: dateFromToday(30),
+            feeMode: CeremonyFeeMode.FREE_WILL,
+            kind: CeremonyKind.PILGRIMAGE,
+            roomTypes,
+          });
+        await post([rooms[0], rooms[0]]).expect(400);
+        await post([{ name: "  ", capacity: 2, fee: 100 }]).expect(400);
+        await post([{ name: "房", capacity: 0, fee: 100 }]).expect(400);
+        await post([{ name: "房", capacity: 2, fee: -1 }]).expect(400);
+      });
+
+      it("人數與房型相同時報名成功，收據左邊備註帶房型名稱，金額為房型費用", async () => {
+        const c = await createPilgrimage({ roomTypes: rooms });
+        const res = await submitRegistrations([
+          { ceremonyId: c.id, walkInName: "王小明", roomType: "雙人房", amount: 3000, seatIndexes: [1, 2] },
+        ]).expect(201);
+        expect(res.body.receipt.amount).toBe(3000);
+        expect(res.body.receipt.items[0].note).toMatch(/^雙人房，/);
+      });
+
+      it("沒選房型、房型不存在、人數不符、金額不符都是 400", async () => {
+        const c = await createPilgrimage({ roomTypes: rooms });
+        const base = { ceremonyId: c.id, walkInName: "王小明" };
+        await submitRegistrations([{ ...base, amount: 3000, seatIndexes: [1, 2] }]).expect(400);
+        await submitRegistrations([{ ...base, roomType: "豪華房", amount: 3000, seatIndexes: [1, 2] }]).expect(400);
+        await submitRegistrations([{ ...base, roomType: "雙人房", amount: 3000, seatIndexes: [1, 2, 5] }]).expect(400);
+        await submitRegistrations([{ ...base, roomType: "四人房", amount: 5200, seatIndexes: [1, 2] }]).expect(400);
+        await submitRegistrations([{ ...base, roomType: "雙人房", amount: 2999, seatIndexes: [1, 2] }]).expect(400);
+        expect((await seatMap(c.id)).every((s) => s.status === "EMPTY")).toBe(true);
+      });
+
+      it("可以編輯房型清單", async () => {
+        const c = await createPilgrimage({ roomTypes: rooms });
+        const res = await director
+          .patch(`/ceremony/ceremonies/${c.id}`, { roomTypes: [{ name: "單人房", capacity: 1, fee: 2000 }] })
+          .expect(200);
+        expect(res.body.roomTypes).toEqual([{ name: "單人房", capacity: 1, fee: 2000 }]);
+      });
+    });
+
     it("作廢收據後，這筆報名的所有座位都釋出", async () => {
       const c = await createPilgrimage();
       const res = await submitRegistrations([
