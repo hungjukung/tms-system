@@ -191,7 +191,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
       await volunteer.patch(`/lantern/claims/${GHOST_ID}`, { walkInName: "x" }).expect(404);
     });
 
-    it("收據與列印資料顯示「燈牆，燈位：代碼」", async () => {
+    it("收據與列印資料顯示「燈位：代碼」", async () => {
       const { slots } = await createWallWithSlots(1, "右牆");
       const claimed = await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "龔忠欣", amount: 600 }).expect(201);
       const details = (await volunteer.get("/print/receipts/details").expect(200)).body;
@@ -206,13 +206,13 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
 
   // ───────────────────────────── 活動報名頁：合併送出 ─────────────────────────────
   describe("合併送出（一張收據包含多個項目）", () => {
-    it("單人點燈：備註是「燈牆，燈位：代碼」，不加姓名", async () => {
+    it("單人點燈：備註是「燈位：代碼」，不加姓名", async () => {
       const { slots } = await createWallWithSlots(1, "右牆");
       const res = await volunteer
         .post("/activities/submit", { pendingLanternClaims: [{ slotId: slots[0].id, lanternType: "光明燈", walkInName: "龔忠欣", amount: 600 }] })
         .expect(201);
       expect(res.body.receipt).toMatchObject({ amount: 600, payerName: "龔忠欣", sourceType: "COMBINED" });
-      expect(res.body.receipt.items[0]).toMatchObject({ description: "光明燈", note: "右牆，燈位：A-01" });
+      expect(res.body.receipt.items[0]).toMatchObject({ description: "光明燈", note: "燈位：A-01" });
     });
 
     it("同一個人點兩盞燈：仍然不加姓名", async () => {
@@ -225,10 +225,10 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
           ],
         })
         .expect(201);
-      expect(res.body.receipt.items.map((i: { note: string }) => i.note)).toEqual(["右牆，燈位：A-01", "右牆，燈位：A-02"]);
+      expect(res.body.receipt.items.map((i: { note: string }) => i.note)).toEqual(["燈位：A-01", "燈位：A-02"]);
     });
 
-    it("多人點燈：備註前面加上姓名「人，燈牆，燈位：代碼」", async () => {
+    it("多人點燈：備註前面加上姓名「人，燈位：代碼」", async () => {
       const { slots } = await createWallWithSlots(2, "右牆");
       const res = await volunteer
         .post("/activities/submit", {
@@ -240,8 +240,8 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
         .expect(201);
       expect(res.body.receipt.amount).toBe(1200);
       expect(res.body.receipt.items.map((i: { note: string }) => i.note)).toEqual([
-        "王小明，右牆，燈位：A-01",
-        "李大華，右牆，燈位：A-02",
+        "王小明，燈位：A-01",
+        "李大華，燈位：A-02",
       ]);
     });
 
@@ -516,7 +516,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
       expect(res.text).toContain("感謝狀");
       expect(res.text).toContain("龔忠欣");
       expect(res.text).toContain("NT$ 600");
-      expect(res.text).toContain("右牆，燈位：A-01");
+      expect(res.text).toContain("燈位：A-01");
       expect(res.text).toContain("測試宮");
       expect(res.text).toContain("存<br/>根<br/>聯");
       expect(res.text).toContain("收<br/>執<br/>聯");

@@ -49,22 +49,22 @@ describe("ActivitiesService.submit（白箱）", () => {
   describe("點燈備註加姓名的規則", () => {
     it("只有一個人點燈（即使點很多盞）：不加姓名", async () => {
       lantern.claimSlotForCombined
-        .mockResolvedValueOnce(claimResult("c1", "龔忠欣", "右牆，燈位：A-01"))
-        .mockResolvedValueOnce(claimResult("c2", "龔忠欣", "右牆，燈位：A-02"));
+        .mockResolvedValueOnce(claimResult("c1", "龔忠欣", "燈位：A-01"))
+        .mockResolvedValueOnce(claimResult("c2", "龔忠欣", "燈位：A-02"));
       await submit({ pendingLanternClaims: [{ amount: 600 }, { amount: 600 }] });
-      expect(issuedItems().map((i) => i.note)).toEqual(["右牆，燈位：A-01", "右牆，燈位：A-02"]);
+      expect(issuedItems().map((i) => i.note)).toEqual(["燈位：A-01", "燈位：A-02"]);
     });
 
     it("兩個不同的人點燈：每一筆前面都加上姓名", async () => {
       lantern.claimSlotForCombined
-        .mockResolvedValueOnce(claimResult("c1", "王小明", "右牆，燈位：A-01"))
-        .mockResolvedValueOnce(claimResult("c2", "李大華", "右牆，燈位：A-02"));
+        .mockResolvedValueOnce(claimResult("c1", "王小明", "燈位：A-01"))
+        .mockResolvedValueOnce(claimResult("c2", "李大華", "燈位：A-02"));
       await submit({ pendingLanternClaims: [{ amount: 600 }, { amount: 600 }] });
-      expect(issuedItems().map((i) => i.note)).toEqual(["王小明，右牆，燈位：A-01", "李大華，右牆，燈位：A-02"]);
+      expect(issuedItems().map((i) => i.note)).toEqual(["王小明，燈位：A-01", "李大華，燈位：A-02"]);
     });
 
     it("單人點燈與整戶點燈的付款人不同：兩邊都加姓名", async () => {
-      lantern.claimSlotForCombined.mockResolvedValueOnce(claimResult("c1", "王小明", "右牆，燈位：A-01"));
+      lantern.claimSlotForCombined.mockResolvedValueOnce(claimResult("c1", "王小明", "燈位：A-01"));
       lantern.claimSlotsForHouseholdCombined.mockResolvedValueOnce({
         payerName: "陳一、陳二",
         description: "點燈*2人",
@@ -73,16 +73,16 @@ describe("ActivitiesService.submit（白箱）", () => {
         claimIds: ["c2", "c3"],
       });
       await submit({ pendingLanternClaims: [{ amount: 600 }], pendingHouseholdLanternClaims: [{ amount: 1200 }] });
-      expect(issuedItems().map((i) => i.note)).toEqual(["王小明，右牆，燈位：A-01", "陳一、陳二，燈位｜B-01、B-02"]);
+      expect(issuedItems().map((i) => i.note)).toEqual(["王小明，燈位：A-01", "陳一、陳二，燈位｜B-01、B-02"]);
     });
 
     it("其中一筆沒有姓名或沒有備註：那一筆維持原樣，不會變成「，燈位…」或「姓名，undefined」", async () => {
       lantern.claimSlotForCombined
-        .mockResolvedValueOnce(claimResult("c1", "", "右牆，燈位：A-01"))
+        .mockResolvedValueOnce(claimResult("c1", "", "燈位：A-01"))
         .mockResolvedValueOnce(claimResult("c2", "李大華", undefined))
-        .mockResolvedValueOnce(claimResult("c3", "王小明", "右牆，燈位：A-03"));
+        .mockResolvedValueOnce(claimResult("c3", "王小明", "燈位：A-03"));
       await submit({ pendingLanternClaims: [{ amount: 1 }, { amount: 1 }, { amount: 1 }] });
-      expect(issuedItems().map((i) => i.note)).toEqual(["右牆，燈位：A-01", undefined, "王小明，右牆，燈位：A-03"]);
+      expect(issuedItems().map((i) => i.note)).toEqual(["燈位：A-01", undefined, "王小明，燈位：A-03"]);
     });
 
     it("活動報名、捐款的備註不受影響（只有點燈項目會加姓名）", async () => {

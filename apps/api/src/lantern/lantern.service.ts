@@ -902,7 +902,7 @@ export class LanternService {
       return {
         payerName: member?.name ?? claim.walkInName ?? "",
         description: claim.lanternType || wall?.name || "點燈",
-        note: slot ? `${wall?.name ? `${wall.name}，` : ""}燈位：${slot.code}` : undefined,
+        note: slot ? `燈位：${slot.code}` : undefined,
       };
     }
     return { payerName: "", description: "" };

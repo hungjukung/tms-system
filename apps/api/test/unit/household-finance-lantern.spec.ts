@@ -601,14 +601,14 @@ describe("LanternService（白箱）", () => {
       expect(await service.describeLanternSource(ReceiptSourceType.DONATION, "gone")).toEqual({ payerName: "", description: "油香捐款", note: undefined });
     });
 
-    it("點燈：項目優先用點燈內容、其次燈牆名稱；備註是「燈牆，燈位：代碼」", async () => {
+    it("點燈：項目優先用點燈內容、其次燈牆名稱；備註是「燈位：代碼」", async () => {
       repos.claim.findOne.mockResolvedValue({ slotId: "s1", memberId: null, walkInName: "龔忠欣", lanternType: null });
       repos.slot.findOne.mockResolvedValue({ id: "s1", wallId: "w1", code: "右1-01" });
       repos.wall.findOne.mockResolvedValue({ name: "右牆" });
       expect(await service.describeLanternSource(ReceiptSourceType.LANTERN_CLAIM, "c1")).toEqual({
         payerName: "龔忠欣",
         description: "右牆",
-        note: "右牆，燈位：右1-01",
+        note: "燈位：右1-01",
       });
 
       repos.claim.findOne.mockResolvedValue({ slotId: "s1", memberId: "m1", walkInName: null, lanternType: "光明燈" });
