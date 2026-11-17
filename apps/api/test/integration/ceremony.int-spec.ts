@@ -369,9 +369,9 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       const pm1 = await register(c.id, CeremonySession.PM, "丙").expect(201);
 
       expect(am1.body.ceremonyRegistration).toMatchObject({ session: "AM", queueNumber: 1 });
-      expect(am1.body.receipt.items[0]).toMatchObject({ description: "祭改", note: "上午場 1號", amount: 300 });
-      expect(am2.body.receipt.items[0].note).toBe("上午場 2號");
-      expect(pm1.body.receipt.items[0].note).toBe("下午場 1號");
+      expect(am1.body.receipt.items[0]).toMatchObject({ description: "祭改", note: "甲，上午場 1號", amount: 300 });
+      expect(am2.body.receipt.items[0].note).toBe("乙，上午場 2號");
+      expect(pm1.body.receipt.items[0].note).toBe("丙，下午場 1號");
 
       const [listed] = (await volunteer.get("/ceremony/ceremonies").expect(200)).body;
       expect(listed).toMatchObject({ morningRegistered: 2, afternoonRegistered: 1, registrationCount: 3 });
@@ -403,9 +403,9 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
         .expect(201);
 
       const next = await register(c.id, CeremonySession.AM, "丙").expect(201);
-      expect(next.body.receipt.items[0].note).toBe("上午場 1號");
+      expect(next.body.receipt.items[0].note).toBe("丙，上午場 1號");
       const afterThat = await register(c.id, CeremonySession.AM, "丁").expect(201);
-      expect(afterThat.body.receipt.items[0].note).toBe("上午場 3號");
+      expect(afterThat.body.receipt.items[0].note).toBe("丁，上午場 3號");
     });
 
     it("整戶報名：每人各拿一個號碼；名額不夠就整批不成立", async () => {

@@ -892,8 +892,9 @@ export class CeremonyService {
     return {
       payerName,
       description: ceremony?.name ?? "",
+      // 祭改的場次號碼前面加上姓名（收據左邊印「姓名，上午場 4號」），一眼看出是誰的號碼
       note: registration.queueNumber
-        ? this.formatQueueLabel(registration.session, registration.queueNumber)
+        ? [payerName, this.formatQueueLabel(registration.session, registration.queueNumber)].filter(Boolean).join("，")
         : registration.seatNumber
           ? this.formatSeatLabel(registration.seatNumber, ceremony?.kind)
           : undefined,

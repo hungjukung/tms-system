@@ -29,7 +29,7 @@ test.describe("活動建立與報名", () => {
     return popup;
   }
 
-  test("總幹事建立祭改活動 → 志工報名上午場 → 收據印出「上午場 1號」", async ({ page, request }) => {
+  test("總幹事建立祭改活動 → 志工報名上午場 → 收據印出「王小明，上午場 1號」", async ({ page, request }) => {
     const name = `祭改E2E-${Date.now()}`;
 
     // 1. 總幹事在「建立活動」頁建立祭改活動，設定上午 2 人、下午 1 人
@@ -62,7 +62,7 @@ test.describe("活動建立與報名", () => {
     await expect(receipt.locator("body")).toContainText("感謝狀");
     await expect(receipt.locator("body")).toContainText("王小明");
     await expect(receipt.locator("body")).toContainText("NT$ 300");
-    await expect(receipt.locator("body")).toContainText("上午場 1號");
+    await expect(receipt.locator("body")).toContainText("王小明，上午場 1號");
     await expect(receipt.locator("body")).toContainText("E2E測試宮");
 
     // 4. 後端資料：上午場已報名 1 人

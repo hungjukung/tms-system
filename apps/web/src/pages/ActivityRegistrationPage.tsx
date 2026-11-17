@@ -1717,11 +1717,8 @@ function LanternFields({
             <Form.Item
               label="點燈內容"
               name="lanternType"
-              extra={
-                wall?.isTaisuiWall
-                  ? "太歲燈牆固定點「太歲燈」，不開放更改"
-                  : "可複選；留空則收據上顯示燈牆名稱"
-              }
+              rules={[{ required: true, type: "array", min: 1, message: "請選擇點燈內容" }]}
+              extra={wall?.isTaisuiWall ? "太歲燈牆固定點「太歲燈」，不開放更改" : "必選，可複選"}
             >
               <Select
                 mode="multiple"

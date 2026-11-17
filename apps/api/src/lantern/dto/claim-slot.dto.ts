@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, IsUUID, Min, MaxLength } from "class-validator";
+import { IsNumber, IsOptional, IsString, IsUUID, Matches, Min, MaxLength } from "class-validator";
 
 export class ClaimSlotDto {
   @IsUUID()
@@ -22,10 +22,11 @@ export class ClaimSlotDto {
   @IsString()
   petitionText?: string;
 
-  /** 點燈內容（例如「光明燈」「平安燈」），未填時收據上改用燈牆名稱 */
-  @IsOptional()
+  /** 點燈內容（例如「光明燈」「平安燈」，複選以「、」合併）：必填，不可為空白 */
   @IsString()
-  lanternType?: string;
+  @Matches(/\S/, { message: "點燈內容不可為空" })
+  @MaxLength(100)
+  lanternType: string;
 
   @IsNumber()
   @Min(0)

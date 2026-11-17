@@ -862,7 +862,7 @@ describe("CeremonyService（白箱）", () => {
 
     it("祭改：備註是場次與號碼（優先於座位）", async () => {
       const result = await describeWith({ ceremonyId: "c1", walkInName: "甲", queueNumber: 3, session: CeremonySession.AM, seatNumber: "1-1" }, jigai());
-      expect(result).toEqual({ payerName: "甲", description: "祭改", note: "上午場 3號" });
+      expect(result).toEqual({ payerName: "甲", description: "祭改", note: "甲，上午場 3號" });
     });
 
     it("進香：備註用「排」；一般活動用「桌」；沒有座位就沒有備註", async () => {

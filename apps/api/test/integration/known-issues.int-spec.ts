@@ -137,7 +137,7 @@ describe("先前發現問題的回歸測試與伺服器端把關", () => {
         .post(`/lantern/walls/${wall.id}/slots`, { prefix: "A", positions: [{ row: 1, column: 1, gridRow: 1, gridColumn: 1 }] })
         .expect(201);
       const [slot] = (await volunteer.get(`/lantern/walls/${wall.id}/slots`).expect(200)).body;
-      await volunteer.post("/lantern/claims", { slotId: slot.id, amount: 600, ...who }).expect(400);
+      await volunteer.post("/lantern/claims", { slotId: slot.id, lanternType: "光明燈", amount: 600, ...who }).expect(400);
       expect((await volunteer.get(`/lantern/walls/${wall.id}/slots`).expect(200)).body[0].status).toBe("EMPTY");
     });
 
@@ -149,6 +149,28 @@ describe("先前發現問題的回歸測試與伺服器端把關", () => {
       await volunteer
         .post("/activities/submit", { gift: { templeId: fx.templeId, items: [{ giftType: GiftType.WATER, quantity: 1 }], ...who } })
         .expect(400);
+    });
+
+    it.each([
+      ["沒有填", undefined],
+      ["空字串", ""],
+      ["只有空白", "   "],
+    ])("點燈內容%s → 400，燈位不會被佔用；編輯時也不能清成空白", async (_label, lanternType) => {
+      const wall = (await director.post("/lantern/walls", { templeId: fx.templeId, name: "牆", year: 2026, slotPrice: 600 }).expect(201)).body;
+      await director
+        .post(`/lantern/walls/${wall.id}/slots`, { prefix: "A", positions: [{ row: 1, column: 1, gridRow: 1, gridColumn: 1 }] })
+        .expect(201);
+      const [slot] = (await volunteer.get(`/lantern/walls/${wall.id}/slots`).expect(200)).body;
+      const res = await volunteer.post("/lantern/claims", { slotId: slot.id, walkInName: "甲", amount: 600, lanternType }).expect(400);
+      expect(JSON.stringify(res.body.message)).toContain("點燈內容");
+      await volunteer.post("/activities/submit", { pendingLanternClaims: [{ slotId: slot.id, walkInName: "甲", amount: 600, lanternType }] }).expect(400);
+      expect((await volunteer.get(`/lantern/walls/${wall.id}/slots`).expect(200)).body[0].status).toBe("EMPTY");
+
+      const ok = await volunteer.post("/lantern/claims", { slotId: slot.id, walkInName: "甲", amount: 600, lanternType: "光明燈、平安燈" }).expect(201);
+      const claimId = ok.body.slot.claim.id;
+      const blank = await volunteer.patch(`/lantern/claims/${claimId}`, { lanternType }).catch(() => undefined);
+      if (lanternType !== undefined) expect(blank?.status).toBe(400);
+      expect((await volunteer.get(`/lantern/walls/${wall.id}/slots`).expect(200)).body[0].claim.lanternType).toBe("光明燈、平安燈");
     });
 
     it("有選信徒或有填姓名（前後空白不算）就可以", async () => {
@@ -361,7 +383,7 @@ describe("先前發現問題的回歸測試與伺服器端把關", () => {
         await volunteer.post("/ceremony/registrations", { ceremonyId: c.id, walkInName: name(51), amount: 0 }).expect(400);
         await submit({ ceremonyId: c.id, walkInName: "甲", seatIndexes: [1, 2], amount: 0, passengerNames: ["", name(51)] }).expect(400);
         await submit({ ceremonyId: c.id, walkInName: name(50), seatIndexes: [1], amount: 0 }).expect(201);
-        await volunteer.post("/lantern/claims", { slotId: GHOST_ID, walkInName: name(51), amount: 1 }).expect(400);
+        await volunteer.post("/lantern/claims", { slotId: GHOST_ID, lanternType: "光明燈", walkInName: name(51), amount: 1 }).expect(400);
         await volunteer.post("/lantern/donations", { templeId: fx.templeId, walkInName: name(51), type: DonationType.GENERAL, amount: 1 }).expect(400);
         await volunteer
           .post("/activities/submit", { gift: { templeId: fx.templeId, walkInName: name(51), items: [{ giftType: GiftType.WATER, quantity: 1 }] } })

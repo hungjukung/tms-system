@@ -254,7 +254,10 @@ export class LanternService {
     }
     if (dto.wishText !== undefined) claim.wishText = dto.wishText;
     if (dto.petitionText !== undefined) claim.petitionText = dto.petitionText;
-    if (dto.lanternType !== undefined) claim.lanternType = dto.lanternType;
+    if (dto.lanternType !== undefined) {
+      if (!dto.lanternType?.trim()) throw new BadRequestException("點燈內容不可為空");
+      claim.lanternType = dto.lanternType;
+    }
 
     const saved = await this.claimRepo.save(claim);
     const slot = await this.slotRepo.findOne({ where: { id: saved.slotId } });

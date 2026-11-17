@@ -116,15 +116,15 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
 
     it("燈牆列表統計燈位數、已點燈數與金額", async () => {
       const { wall, slots } = await createWallWithSlots(3);
-      await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
-      await volunteer.post("/lantern/claims", { slotId: slots[1].id, walkInName: "乙", amount: 800 }).expect(201);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "甲", amount: 600 }).expect(201);
+      await volunteer.post("/lantern/claims", { slotId: slots[1].id, lanternType: "光明燈", walkInName: "乙", amount: 800 }).expect(201);
       const [listed] = (await volunteer.get(`/lantern/walls?templeId=${fx.templeId}`).expect(200)).body;
       expect(listed).toMatchObject({ id: wall.id, slotCount: 3, claimedCount: 2, totalAmount: 1400 });
     });
 
     it("刪除燈牆：已有人點燈先 409，force 才刪", async () => {
       const { wall, slots } = await createWallWithSlots(2);
-      await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "甲", amount: 600 }).expect(201);
       const blocked = await director.delete(`/lantern/walls/${wall.id}`).expect(409);
       expect(blocked.body.claimedCount).toBe(1);
       await director.delete(`/lantern/walls/${wall.id}?force=true`).expect(200);
@@ -158,31 +158,31 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
 
     it("同一個燈位被第二個櫃台認領：409", async () => {
       const { slots } = await createWallWithSlots(1);
-      await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
-      const res = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "乙", amount: 600 }).expect(409);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "甲", amount: 600 }).expect(201);
+      const res = await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "乙", amount: 600 }).expect(409);
       expect(res.body.message).toContain("此燈位已被其他櫃台認領");
     });
 
     it("兩個櫃台同時搶同一個燈位：只有一個成功", async () => {
       const { slots } = await createWallWithSlots(1);
       const [a, b] = await Promise.all([
-        volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "A", amount: 600 }),
-        finance.post("/lantern/claims", { slotId: slots[0].id, walkInName: "B", amount: 600 }),
+        volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "A", amount: 600 }),
+        finance.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "B", amount: 600 }),
       ]);
       expect([a.status, b.status].sort()).toEqual([201, 409]);
     });
 
     it("燈位或信徒不存在：404；金額為負：400", async () => {
       const { slots } = await createWallWithSlots(1);
-      await volunteer.post("/lantern/claims", { slotId: GHOST_ID, walkInName: "甲", amount: 1 }).expect(404);
-      await volunteer.post("/lantern/claims", { slotId: slots[0].id, memberId: GHOST_ID, amount: 1 }).expect(404);
-      await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: -1 }).expect(400);
-      await volunteer.post("/lantern/claims", { slotId: "abc", walkInName: "甲", amount: 1 }).expect(400);
+      await volunteer.post("/lantern/claims", { slotId: GHOST_ID, lanternType: "光明燈", walkInName: "甲", amount: 1 }).expect(404);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", memberId: GHOST_ID, amount: 1 }).expect(404);
+      await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "甲", amount: -1 }).expect(400);
+      await volunteer.post("/lantern/claims", { slotId: "abc", lanternType: "光明燈", walkInName: "甲", amount: 1 }).expect(400);
     });
 
     it("可以修正已認領燈位的姓名與點燈內容", async () => {
       const { wall, slots } = await createWallWithSlots(1);
-      const claimed = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "打錯字", amount: 600 }).expect(201);
+      const claimed = await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "打錯字", amount: 600 }).expect(201);
       const res = await volunteer
         .patch(`/lantern/claims/${claimed.body.slot.claim.id}`, { walkInName: "王小明", lanternType: "平安燈" })
         .expect(200);
@@ -193,9 +193,9 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
 
     it("收據與列印資料顯示「燈牆，燈位：代碼」", async () => {
       const { slots } = await createWallWithSlots(1, "右牆");
-      const claimed = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "龔忠欣", amount: 600 }).expect(201);
+      const claimed = await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "龔忠欣", amount: 600 }).expect(201);
       const details = (await volunteer.get("/print/receipts/details").expect(200)).body;
-      expect(details.items[0]).toMatchObject({ payerName: "龔忠欣", description: "右牆", amount: 600 });
+      expect(details.items[0]).toMatchObject({ payerName: "龔忠欣", description: "光明燈", amount: 600 });
 
       const label = await volunteer.get(`/print/lantern-label/${claimed.body.slot.claim.id}`).expect(200);
       expect(label.text).toContain("右牆");
@@ -209,10 +209,10 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
     it("單人點燈：備註是「燈牆，燈位：代碼」，不加姓名", async () => {
       const { slots } = await createWallWithSlots(1, "右牆");
       const res = await volunteer
-        .post("/activities/submit", { pendingLanternClaims: [{ slotId: slots[0].id, walkInName: "龔忠欣", amount: 600 }] })
+        .post("/activities/submit", { pendingLanternClaims: [{ slotId: slots[0].id, lanternType: "光明燈", walkInName: "龔忠欣", amount: 600 }] })
         .expect(201);
       expect(res.body.receipt).toMatchObject({ amount: 600, payerName: "龔忠欣", sourceType: "COMBINED" });
-      expect(res.body.receipt.items[0]).toMatchObject({ description: "右牆", note: "右牆，燈位：A-01" });
+      expect(res.body.receipt.items[0]).toMatchObject({ description: "光明燈", note: "右牆，燈位：A-01" });
     });
 
     it("同一個人點兩盞燈：仍然不加姓名", async () => {
@@ -220,8 +220,8 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
       const res = await volunteer
         .post("/activities/submit", {
           pendingLanternClaims: [
-            { slotId: slots[0].id, walkInName: "龔忠欣", amount: 600 },
-            { slotId: slots[1].id, walkInName: "龔忠欣", amount: 600 },
+            { slotId: slots[0].id, lanternType: "光明燈", walkInName: "龔忠欣", amount: 600 },
+            { slotId: slots[1].id, lanternType: "光明燈", walkInName: "龔忠欣", amount: 600 },
           ],
         })
         .expect(201);
@@ -233,8 +233,8 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
       const res = await volunteer
         .post("/activities/submit", {
           pendingLanternClaims: [
-            { slotId: slots[0].id, walkInName: "王小明", amount: 600 },
-            { slotId: slots[1].id, walkInName: "李大華", amount: 600 },
+            { slotId: slots[0].id, lanternType: "光明燈", walkInName: "王小明", amount: 600 },
+            { slotId: slots[1].id, lanternType: "光明燈", walkInName: "李大華", amount: 600 },
           ],
         })
         .expect(201);
@@ -273,7 +273,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
 
       const res = await volunteer
         .post("/activities/submit", {
-          pendingLanternClaims: [{ slotId: slots[0].id, memberId: member.id, amount: 600 }],
+          pendingLanternClaims: [{ slotId: slots[0].id, lanternType: "光明燈", memberId: member.id, amount: 600 }],
           pendingCeremonyRegistrations: [{ ceremonyId: ceremony.id, memberId: member.id, amount: 1000 }],
           donation: { templeId: fx.templeId, memberId: member.id, type: DonationType.GENERAL, amount: 500 },
           gift: { templeId: fx.templeId, memberId: member.id, items: [{ giftType: GiftType.FLOWERS, quantity: 2 }] },
@@ -282,7 +282,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
 
       expect(res.body.receipt).toMatchObject({ amount: 2100, payerName: "王小明", sourceType: "COMBINED" });
       expect(res.body.receipt.items.map((i: { description: string; amount: number }) => [i.description, i.amount])).toEqual([
-        ["右牆", 600],
+        ["光明燈", 600],
         ["法會", 1000],
         ["一般捐款", 500],
         ["送禮", 0],
@@ -299,13 +299,13 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
 
     it("其中一項失敗：前面已經卡到的燈位會放掉，也不會開出收據", async () => {
       const { wall, slots } = await createWallWithSlots(2);
-      await volunteer.post("/lantern/claims", { slotId: slots[1].id, walkInName: "先來的", amount: 600 }).expect(201);
+      await volunteer.post("/lantern/claims", { slotId: slots[1].id, lanternType: "光明燈", walkInName: "先來的", amount: 600 }).expect(201);
 
       await volunteer
         .post("/activities/submit", {
           pendingLanternClaims: [
-            { slotId: slots[0].id, walkInName: "後到的", amount: 600 },
-            { slotId: slots[1].id, walkInName: "後到的", amount: 600 }, // 已被認領
+            { slotId: slots[0].id, lanternType: "光明燈", walkInName: "後到的", amount: 600 },
+            { slotId: slots[1].id, lanternType: "光明燈", walkInName: "後到的", amount: 600 }, // 已被認領
           ],
         })
         .expect(409);
@@ -380,7 +380,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
     it("可以用姓名或收據編號搜尋、用活動類型篩選、分頁", async () => {
       const { slots } = await createWallWithSlots(1);
       const member = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "王小明");
-      const lantern = await volunteer.post("/lantern/claims", { slotId: slots[0].id, memberId: member.id, amount: 600 }).expect(201);
+      const lantern = await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", memberId: member.id, amount: 600 }).expect(201);
       await volunteer
         .post("/lantern/donations", { templeId: fx.templeId, walkInName: "李大華", type: DonationType.GENERAL, amount: 100 })
         .expect(201);
@@ -415,7 +415,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
   describe("收據作廢", () => {
     const issueLanternReceipt = async () => {
       const { wall, slots } = await createWallWithSlots(1);
-      const res = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
+      const res = await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "甲", amount: 600 }).expect(201);
       return { wall, receiptId: res.body.receipt.id as string };
     };
 
@@ -426,7 +426,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
 
       const [slot] = await slotsOf(wall.id);
       expect(slot.status).toBe("EMPTY");
-      await volunteer.post("/lantern/claims", { slotId: slot.id, walkInName: "乙", amount: 600 }).expect(201);
+      await volunteer.post("/lantern/claims", { slotId: slot.id, lanternType: "光明燈", walkInName: "乙", amount: 600 }).expect(201);
     });
 
     it("志工、報名櫃檯不能作廢：403", async () => {
@@ -466,7 +466,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
       ).body;
       const submitted = await volunteer
         .post("/activities/submit", {
-          pendingLanternClaims: [{ slotId: slots[0].id, walkInName: "甲", amount: 600 }],
+          pendingLanternClaims: [{ slotId: slots[0].id, lanternType: "光明燈", walkInName: "甲", amount: 600 }],
           pendingCeremonyRegistrations: [{ ceremonyId: ceremony.id, walkInName: "甲", amount: 1000, seatIndex: 1 }],
         })
         .expect(201);
@@ -492,7 +492,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
   describe("收據永久刪除（僅總幹事）", () => {
     it("刪除後收據與來源紀錄都消失；財務不能刪", async () => {
       const { wall, slots } = await createWallWithSlots(1);
-      const res = await volunteer.post("/lantern/claims", { slotId: slots[0].id, walkInName: "甲", amount: 600 }).expect(201);
+      const res = await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "甲", amount: 600 }).expect(201);
       const receiptId = res.body.receipt.id;
 
       await finance.delete(`/lantern/receipts/${receiptId}`).expect(403);
@@ -509,7 +509,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
     it("列印頁包含姓名、金額、備註與廟名；存根聯與收執聯各一份", async () => {
       const { slots } = await createWallWithSlots(1, "右牆");
       const submitted = await volunteer
-        .post("/activities/submit", { pendingLanternClaims: [{ slotId: slots[0].id, walkInName: "龔忠欣", amount: 600 }] })
+        .post("/activities/submit", { pendingLanternClaims: [{ slotId: slots[0].id, lanternType: "光明燈", walkInName: "龔忠欣", amount: 600 }] })
         .expect(201);
       const res = await volunteer.get(`/print/receipt/${submitted.body.receipt.id}`).expect(200);
       expect(res.headers["content-type"]).toContain("text/html");
