@@ -44,6 +44,7 @@ import {
   getCeremonyReport,
   getCeremonySeats,
   listCeremonies,
+  movePilgrimageBooking,
   updateCeremony,
 } from "../api/ceremony";
 import {
@@ -62,6 +63,13 @@ import { useAuth } from "../context/AuthContext";
 import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportRowsToExcel, exportSheetsToExcel } from "../utils/export";
 import { buildPilgrimageWorkbook } from "../utils/pilgrimageReport";
+import {
+  buildBusRosterHtml,
+  buildParticipantRosterHtml,
+  buildRoomRosterHtml,
+  buildSettlementHtml,
+  openHtmlPrintWindow,
+} from "../utils/printReport";
 import { joinLanternType, splitLanternType } from "../utils/lanternType";
 
 type ActivityType = "ceremony" | "jigai" | "pilgrimage" | "lanternWall";
@@ -642,9 +650,106 @@ function CeremonyListCard({ templeId }: { templeId: string }) {
   );
 }
 
+/**
+ * 總幹事調整已報名的進香：同一間房的人一起換房型和／或車次。
+ * 只列出每人費用相同的房型（收據金額才不會變）；費用不同要作廢收據重新報名。
+ */
+function MovePilgrimageModal({
+  ceremony,
+  registration,
+  roommates,
+  onClose,
+}: {
+  ceremony: CeremonyDto;
+  registration: CeremonyRegistrationDto;
+  roommates: string[];
+  onClose: () => void;
+}) {
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
+  const [form] = Form.useForm();
+  const currentRoom = ceremony.roomTypes?.find((r) => r.name === registration.roomType);
+  const busCount = ceremony.busCount ?? 0;
+
+  const mutation = useMutation({
+    mutationFn: (values: { roomType?: string; busNumber?: number }) => movePilgrimageBooking(registration.id, values),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["ceremony-report", ceremony.id] });
+      queryClient.invalidateQueries({ queryKey: ["ceremonies"] });
+      message.success(`已調整：${result.changes.join("；")}`);
+      onClose();
+    },
+    onError: (err: any) => message.error(err?.response?.data?.message ?? "調整失敗，請重試"),
+  });
+
+  const roomOptions = (ceremony.roomTypes ?? []).map((r) => {
+    const sameFee = !!currentRoom && Math.round(r.fee * 100) === Math.round(currentRoom.fee * 100);
+    const fits = r.capacity >= roommates.length;
+    const left = r.roomCount == null ? null : r.roomCount - r.roomsBooked;
+    const isCurrent = r.name === registration.roomType;
+    const reason = isCurrent ? "" : !sameFee ? "，每人費用不同" : !fits ? "，住不下" : left != null && left <= 0 ? "，已訂滿" : "";
+    return {
+      value: r.name,
+      label: `${r.name}（每間 ${r.capacity} 人，每人 NT$ ${r.fee}${left != null ? `，剩 ${Math.max(left, 0)} 間` : ""}${isCurrent ? "，目前" : ""}${reason}）`,
+      disabled: !isCurrent && (!sameFee || !fits || (left != null && left <= 0)),
+    };
+  });
+
+  return (
+    <Modal title="調整房型／車次" open onCancel={onClose} footer={null} destroyOnClose>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={`同一間房的人會一起調整：${roommates.join("、")}`}
+        description="只能換成每人費用相同的房型（收據金額不變）；費用不同請作廢收據後重新報名。調整後收據備註會一起更新，並記在操作紀錄。"
+      />
+      <Form
+        form={form}
+        name="moveBooking"
+        layout="vertical"
+        initialValues={{ roomType: registration.roomType ?? undefined, busNumber: registration.busNumber ?? undefined }}
+        onFinish={(values) =>
+          mutation.mutate({
+            roomType: registration.roomType && values.roomType !== registration.roomType ? values.roomType : undefined,
+            busNumber: values.busNumber !== registration.busNumber ? values.busNumber : undefined,
+          })
+        }
+      >
+        {registration.roomType && (
+          <Form.Item label={`房型（目前：${registration.roomType} 第${registration.roomNumber}間）`} name="roomType">
+            <Select options={roomOptions} />
+          </Form.Item>
+        )}
+        {busCount > 0 && (
+          <Form.Item label={`車次（目前：${registration.busNumber != null ? `第${registration.busNumber}車` : "未指定"}）`} name="busNumber">
+            <Select
+              options={Array.from({ length: busCount }, (_, i) => {
+                const left = PILGRIMAGE_BUS_SEAT_COUNT - (ceremony.busLoads?.[i] ?? 0);
+                const isCurrent = registration.busNumber === i + 1;
+                return {
+                  value: i + 1,
+                  label: `第 ${i + 1} 車（剩 ${Math.max(left, 0)} 位${isCurrent ? "，目前" : ""}）`,
+                  disabled: !isCurrent && left < roommates.length,
+                };
+              })}
+            />
+          </Form.Item>
+        )}
+        <Button type="primary" htmlType="submit" block loading={mutation.isPending}>
+          確認調整
+        </Button>
+      </Form>
+    </Modal>
+  );
+}
+
 function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClose: () => void }) {
   const { user } = useAuth();
+  const { message } = App.useApp();
   const canDeleteReceipt = user?.role === UserRole.DIRECTOR;
+  const canMoveBooking = user?.role === UserRole.DIRECTOR;
+  const [movingRegistration, setMovingRegistration] = useState<CeremonyRegistrationDto | null>(null);
   const queryClient = useQueryClient();
   const reportQuery = useQuery({
     queryKey: ["ceremony-report", ceremony.id],
@@ -686,6 +791,11 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
       ["分類", "金額", "說明", "日期"],
       expenses.map((e) => [e.category, e.amount, e.description ?? "", e.occurredAt]),
     );
+  };
+
+  const printReport = (build: (report: NonNullable<typeof reportQuery.data>) => string) => {
+    if (!reportQuery.data) return;
+    if (!openHtmlPrintWindow(build(reportQuery.data))) message.error("瀏覽器封鎖了新視窗，請允許彈出視窗以列印");
   };
 
   const handleExportPilgrimageWorkbook = () => {
@@ -790,11 +900,30 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
           <Statistic title="列入活動計算的支出" value={expenseTotal} prefix="NT$" valueStyle={{ color: "#1a5c26" }} />
         </Space>
 
-        {isPilgrimage && (
-          <Button type="primary" onClick={handleExportPilgrimageWorkbook} disabled={!reportQuery.data}>
-            匯出進香總表 Excel（房型名單、車次名單、收入支出總表、收禮資訊）
+        <Space wrap>
+          {isPilgrimage && (
+            <Button type="primary" onClick={handleExportPilgrimageWorkbook} disabled={!reportQuery.data}>
+              匯出進香總表 Excel（房型名單、車次名單、收入支出總表、收禮資訊）
+            </Button>
+          )}
+          {isPilgrimage ? (
+            <>
+              <Button onClick={() => printReport(buildBusRosterHtml)} disabled={!reportQuery.data}>
+                列印車次名單
+              </Button>
+              <Button onClick={() => printReport(buildRoomRosterHtml)} disabled={!reportQuery.data}>
+                列印房型名單
+              </Button>
+            </>
+          ) : (
+            <Button onClick={() => printReport(buildParticipantRosterHtml)} disabled={!reportQuery.data}>
+              列印報名名單
+            </Button>
+          )}
+          <Button onClick={() => printReport(buildSettlementHtml)} disabled={!reportQuery.data}>
+            列印結算摘要
           </Button>
-        )}
+        </Space>
 
         {ceremony.totalSeats != null && (
           <Card
@@ -866,10 +995,15 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
                 title: "操作",
                 render: (_, record) =>
                   record.receiptId ? (
-                    <Space>
+                    <Space wrap>
                       <Button size="small" onClick={() => openPrintWindow(`/print/receipt/${record.receiptId}`)}>
                         補印
                       </Button>
+                      {isPilgrimage && canMoveBooking && (record.roomType || (ceremony.busCount ?? 0) > 1) && (
+                        <Button size="small" onClick={() => setMovingRegistration(record)}>
+                          調整房型／車次
+                        </Button>
+                      )}
                       {canDeleteReceipt && (
                         <Popconfirm
                           title="確定要永久刪除這張收據嗎？"
@@ -892,6 +1026,20 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
             ]}
           />
         </Card>
+        {movingRegistration && (
+          <MovePilgrimageModal
+            ceremony={reportQuery.data?.ceremony ?? ceremony}
+            registration={movingRegistration}
+            roommates={
+              movingRegistration.roomType
+                ? registrations
+                    .filter((r) => r.roomType === movingRegistration.roomType && r.roomNumber === movingRegistration.roomNumber)
+                    .map((r) => r.participantName || "（未留姓名）")
+                : [movingRegistration.participantName || "（未留姓名）"]
+            }
+            onClose={() => setMovingRegistration(null)}
+          />
+        )}
 
         <Card
           size="small"

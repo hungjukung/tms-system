@@ -36,7 +36,9 @@ export default defineConfig({
       env: { E2E_API_PORT: String(API_PORT) },
     },
     {
-      command: "pnpm --filter @tms/web exec vite --port " + WEB_PORT + " --strictPort",
+      // --force：每次都重新預先打包相依套件。共用套件（@tms/shared）新增匯出時，舊的打包快取裡沒有，
+      // 前端會整個載入失敗（所有測試一起逾時），強制重建可避免沿用過期快取
+      command: "pnpm --filter @tms/web exec vite --port " + WEB_PORT + " --strictPort --force",
       url: `http://localhost:${WEB_PORT}`,
       reuseExistingServer: false,
       timeout: 120_000,

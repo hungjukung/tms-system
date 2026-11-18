@@ -841,6 +841,35 @@ export class LanternService {
     return receiptIdBySourceId;
   }
 
+  /**
+   * 活動報名調整（例如換房型／車次）之後，同步更新合併收據上對應項目的備註，補印出來才會跟實際一致。
+   * 只動 sourceRefs 涵蓋這些來源紀錄的項目；rewrite 收到舊備註、回傳新備註。回傳有改到幾張收據。
+   */
+  async rewriteReceiptItemNotes(
+    sourceType: ReceiptSourceType,
+    sourceIds: string[],
+    rewrite: (note: string | undefined) => string | undefined,
+  ): Promise<number> {
+    if (sourceIds.length === 0) return 0;
+    const ids = new Set(sourceIds);
+    const receipts = await this.receiptRepo.find({ where: { sourceType: ReceiptSourceType.COMBINED } });
+    let changed = 0;
+    for (const receipt of receipts) {
+      let touched = false;
+      for (const item of receipt.items ?? []) {
+        if ((item.sourceRefs ?? []).some((ref) => ref.sourceType === sourceType && ids.has(ref.sourceId))) {
+          item.note = rewrite(item.note);
+          touched = true;
+        }
+      }
+      if (touched) {
+        await this.receiptRepo.save(receipt);
+        changed++;
+      }
+    }
+    return changed;
+  }
+
   async voidReceipt(receiptId: string, reason: string, userId: string): Promise<ReceiptDto> {
     const receipt = await this.receiptRepo.findOne({ where: { id: receiptId } });
     if (!receipt) throw new NotFoundException("找不到收據");

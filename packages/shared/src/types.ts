@@ -773,3 +773,45 @@ export interface UpdateTempleSettingsRequest {
   chairmanTitle?: string;
   chairmanName?: string;
 }
+
+/** 操作紀錄一列：誰、什麼時候、做了什麼（收據開立／作廢與其他操作合併顯示） */
+export interface AuditLogDto {
+  id: string;
+  /** 操作種類，對照 AUDIT_ACTION_LABEL */
+  action: string;
+  entityType: string;
+  summary: string;
+  userName: string;
+  createdAt: string;
+}
+
+/** 總幹事調整已報名的進香：換房型和／或換車次（同一間房的所有參加者一起換） */
+export interface MovePilgrimageBookingRequest {
+  roomType?: string;
+  busNumber?: number;
+}
+
+export interface MovePilgrimageBookingResponse {
+  roomType: string | null;
+  roomNumber: number | null;
+  busNumber: number | null;
+  participantNames: string[];
+  /** 這次改了什麼，例如「房型 雙人房 第1間 → 四人房 第1間」「車次 第1車 → 第2車」 */
+  changes: string[];
+}
+
+/** 報名前檢查重複：已建檔信徒用 memberIds、臨櫃姓名用 names */
+export interface DuplicateCheckRequest {
+  memberIds?: string[];
+  names?: string[];
+}
+
+export interface DuplicateRegistrationDto {
+  name: string;
+  /** 之前報名的內容，例如「雙人房 第1間　第2車」「上午場 3號」 */
+  detail: string;
+}
+
+export interface DuplicateCheckResponse {
+  duplicates: DuplicateRegistrationDto[];
+}

@@ -8,6 +8,7 @@ import { CreateActivityPage } from "./pages/CreateActivityPage";
 import { FinancePage } from "./pages/FinancePage";
 import { InventoryPage } from "./pages/InventoryPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { AuditLogPage } from "./pages/AuditLogPage";
 import { useAuth } from "./context/AuthContext";
 import { TempleProvider } from "./context/TempleContext";
 
@@ -91,6 +92,14 @@ export function App() {
           element={
             <RequireManagementAccess>
               <SettingsPage />
+            </RequireManagementAccess>
+          }
+        />
+        <Route
+          path="audit-log"
+          element={
+            <RequireManagementAccess>
+              <AuditLogPage />
             </RequireManagementAccess>
           }
         />

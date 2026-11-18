@@ -156,3 +156,14 @@ export const PETTY_CASH_CATEGORY_LABEL = "零用金撥補";
 /** 撥補零用金的功能已改綁定到「零用金撥補」，此字面字串僅保留供比對歷史上用舊版「零用金」分類建立的撥補紀錄，
  *  確保「剩餘零用金」餘額計算不會漏算這些舊資料 */
 export const PETTY_CASH_LEGACY_CATEGORY_LABEL = "零用金";
+
+/** 操作紀錄的操作種類（顯示用名稱） */
+export const AUDIT_ACTION_LABEL: Record<string, string> = {
+  PILGRIMAGE_MOVE: "調整進香房型／車次",
+  CEREMONY_CREATE: "建立活動",
+  CEREMONY_UPDATE: "修改活動",
+  CEREMONY_DELETE: "刪除活動",
+  RECEIPT_DELETE: "永久刪除收據",
+  RECEIPT_VOID: "作廢收據",
+  RECEIPT_ISSUE: "開立收據",
+};

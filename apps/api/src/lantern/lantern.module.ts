@@ -10,6 +10,7 @@ import { User } from "../auth/entities/user.entity";
 import { Ceremony } from "../ceremony/entities/ceremony.entity";
 import { CeremonyRegistration } from "../ceremony/entities/ceremony-registration.entity";
 import { Gift } from "../gift/entities/gift.entity";
+import { AuditModule } from "../audit/audit.module";
 import { HouseholdModule } from "../household/household.module";
 import { LanternService } from "./lantern.service";
 import { LanternController } from "./lantern.controller";
@@ -30,6 +31,7 @@ import { LanternGateway } from "./lantern.gateway";
       Gift,
     ]),
     HouseholdModule,
+    AuditModule,
   ],
   providers: [LanternService, LanternGateway],
   controllers: [LanternController],

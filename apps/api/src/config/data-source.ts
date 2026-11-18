@@ -17,6 +17,7 @@ import { InventoryItem } from "../inventory/entities/inventory-item.entity";
 import { InventoryTransaction } from "../inventory/entities/inventory-transaction.entity";
 import { Temple } from "../settings/entities/temple.entity";
 import { Gift } from "../gift/entities/gift.entity";
+import { AuditLog } from "../audit/entities/audit-log.entity";
 
 export const AppDataSource = new DataSource({
   type: "postgres",
@@ -45,6 +46,7 @@ export const AppDataSource = new DataSource({
     InventoryTransaction,
     Temple,
     Gift,
+    AuditLog,
   ],
   migrations: ["src/migrations/*.ts"],
 });

@@ -7,7 +7,7 @@ export interface ReportSheet {
   rows: SheetRows;
 }
 
-const GIFT_LABEL: Record<GiftType, string> = {
+export const GIFT_LABEL: Record<GiftType, string> = {
   [GiftType.FLOWERS]: "鮮花",
   [GiftType.LONGEVITY]: "壽桃壽麵",
   [GiftType.WATER]: "水",
@@ -20,7 +20,7 @@ const timeText = (iso: string) => dayjs(iso).format("YYYY-MM-DD HH:mm");
 const nameOf = (r: CeremonyRegistrationDto) => r.participantName || "（未留姓名）";
 
 /** 同一間房的參加者（同房型、同房號；沒有房型的舊資料以收據分組）合成一列 */
-interface RoomGroup {
+export interface RoomGroup {
   roomType: string;
   roomNumber: number | null;
   names: string[];
@@ -29,7 +29,7 @@ interface RoomGroup {
   busNumber: number | null;
 }
 
-function groupByRoom(registrations: CeremonyRegistrationDto[]): RoomGroup[] {
+export function groupByRoom(registrations: CeremonyRegistrationDto[]): RoomGroup[] {
   const groups = new Map<string, RoomGroup>();
   for (const r of registrations) {
     const roomType = r.roomType ?? "";

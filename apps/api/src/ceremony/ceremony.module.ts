@@ -6,6 +6,7 @@ import { User } from "../auth/entities/user.entity";
 import { LedgerEntry } from "../finance/entities/ledger-entry.entity";
 import { HouseholdModule } from "../household/household.module";
 import { LanternModule } from "../lantern/lantern.module";
+import { AuditModule } from "../audit/audit.module";
 import { CeremonyService } from "./ceremony.service";
 import { CeremonyController } from "./ceremony.controller";
 
@@ -14,6 +15,7 @@ import { CeremonyController } from "./ceremony.controller";
     TypeOrmModule.forFeature([Ceremony, CeremonyRegistration, User, LedgerEntry]),
     HouseholdModule,
     LanternModule,
+    AuditModule,
   ],
   providers: [CeremonyService],
   controllers: [CeremonyController],

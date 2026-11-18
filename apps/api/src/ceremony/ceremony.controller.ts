@@ -9,6 +9,7 @@ import { CeremonyService } from "./ceremony.service";
 import { CreateCeremonyDto } from "./dto/create-ceremony.dto";
 import { UpdateCeremonyDto } from "./dto/update-ceremony.dto";
 import { RegisterCeremonyDto } from "./dto/register-ceremony.dto";
+import { DuplicateCheckDto, MovePilgrimageBookingDto } from "./dto/move-pilgrimage.dto";
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller("ceremony")
@@ -17,8 +18,8 @@ export class CeremonyController {
 
   @Post("ceremonies")
   @Roles(UserRole.DIRECTOR)
-  createCeremony(@Body() dto: CreateCeremonyDto) {
-    return this.ceremonyService.createCeremony(dto);
+  createCeremony(@Body() dto: CreateCeremonyDto, @CurrentUser() user: RequestUser) {
+    return this.ceremonyService.createCeremony(dto, user.userId);
   }
 
   @Get("ceremonies")
@@ -29,14 +30,14 @@ export class CeremonyController {
 
   @Patch("ceremonies/:id")
   @Roles(UserRole.DIRECTOR)
-  updateCeremony(@Param("id") id: string, @Body() dto: UpdateCeremonyDto) {
-    return this.ceremonyService.updateCeremony(id, dto);
+  updateCeremony(@Param("id") id: string, @Body() dto: UpdateCeremonyDto, @CurrentUser() user: RequestUser) {
+    return this.ceremonyService.updateCeremony(id, dto, user.userId);
   }
 
   @Delete("ceremonies/:id")
   @Roles(UserRole.DIRECTOR)
-  deleteCeremony(@Param("id") id: string, @Query("force") force?: string) {
-    return this.ceremonyService.deleteCeremony(id, force === "true");
+  deleteCeremony(@Param("id") id: string, @Query("force") force?: string, @CurrentUser() user?: RequestUser) {
+    return this.ceremonyService.deleteCeremony(id, force === "true", user?.userId);
   }
 
   @Get("ceremonies/:id/seats")
@@ -63,6 +64,24 @@ export class CeremonyController {
   @Roles(UserRole.VOLUNTEER, UserRole.FINANCE, UserRole.DIRECTOR, UserRole.REGISTRAR)
   registerForCombined(@Body() dto: RegisterCeremonyDto, @CurrentUser() user: RequestUser) {
     return this.ceremonyService.createRegistrationForCombined(dto, user.userId);
+  }
+
+  /** 報名前檢查：這些人在這個活動是不是已經報名過（已作廢的不算），讓櫃台在重複收費前先確認 */
+  @Post("ceremonies/:id/duplicate-check")
+  @Roles(UserRole.VOLUNTEER, UserRole.FINANCE, UserRole.DIRECTOR, UserRole.REGISTRAR)
+  checkDuplicates(@Param("id") id: string, @Body() dto: DuplicateCheckDto) {
+    return this.ceremonyService.findDuplicateRegistrations(id, dto.memberIds ?? [], dto.names ?? []);
+  }
+
+  /** 報名後調整進香：同一間房的所有參加者一起換房型和／或車次，只有總幹事可以操作，並留下操作紀錄 */
+  @Patch("registrations/:id/pilgrimage-booking")
+  @Roles(UserRole.DIRECTOR)
+  movePilgrimageBooking(
+    @Param("id") id: string,
+    @Body() dto: MovePilgrimageBookingDto,
+    @CurrentUser() user: RequestUser,
+  ) {
+    return this.ceremonyService.movePilgrimageBooking(id, dto, user.userId);
   }
 
   /** 供「活動報名」頁在送出並開立收據前，從加入清單中移除某筆尚未送出的報名項目使用 */

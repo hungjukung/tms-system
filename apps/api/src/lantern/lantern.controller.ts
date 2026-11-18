@@ -7,6 +7,7 @@ import { Roles } from "../auth/decorators/roles.decorator";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
 import { RequestUser } from "../auth/jwt-payload.interface";
 import { LanternService } from "./lantern.service";
+import { AuditService } from "../audit/audit.service";
 import { ClaimSlotDto } from "./dto/claim-slot.dto";
 import { UpdateLanternClaimDto } from "./dto/update-claim.dto";
 import { ClaimHouseholdSlotsDto } from "./dto/claim-household-slots.dto";
@@ -17,7 +18,10 @@ import { VoidReceiptDto } from "./dto/void-receipt.dto";
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class LanternController {
-  constructor(private readonly lanternService: LanternService) {}
+  constructor(
+    private readonly lanternService: LanternService,
+    private readonly auditService: AuditService,
+  ) {}
 
   @Post("lantern/walls")
   @Roles(UserRole.DIRECTOR)
@@ -121,8 +125,23 @@ export class LanternController {
   /** 真正從資料庫永久刪除收據（不同於作廢），僅總幹事可操作，無法復原 */
   @Delete("lantern/receipts/:id")
   @Roles(UserRole.DIRECTOR)
-  deleteReceipt(@Param("id") id: string) {
-    return this.lanternService.deleteReceipt(id);
+  async deleteReceipt(@Param("id") id: string, @CurrentUser() user: RequestUser) {
+    // 永久刪除之後收據本身和它的開立／作廢紀錄都不見了，所以先把收據編號與金額記進操作紀錄
+    const core = await this.lanternService.getReceiptCore(id);
+    // 合併收據直接存了付款人；單筆點燈／捐款收據要從來源紀錄查（活動報名的單筆收據查不到就留空）
+    let payerName = core.payerName ?? "";
+    if (!payerName && core.sourceId && core.sourceType !== ReceiptSourceType.CEREMONY_REGISTRATION) {
+      payerName = (await this.lanternService.describeLanternSource(core.sourceType, core.sourceId).catch(() => null))?.payerName ?? "";
+    }
+    await this.lanternService.deleteReceipt(id);
+    await this.auditService.record({
+      action: "RECEIPT_DELETE",
+      entityType: "RECEIPT",
+      entityId: id,
+      summary: `永久刪除收據 ${core.receiptNo}　NT$ ${core.amount.toLocaleString("en-US")}${payerName ? `　${payerName}` : ""}（${core.status === "VOIDED" ? "已作廢" : "正常"}）`,
+      userId: user.userId,
+      templeId: core.templeId,
+    });
   }
 
   @Get("lantern/members/:memberId/history")

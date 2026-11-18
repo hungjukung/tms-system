@@ -94,3 +94,58 @@ body {
 .table-seat-row.lantern-row .slot-cell > div {
   white-space: nowrap;
 }
+
+/* ───────────── 手機／平板 ───────────── */
+.app-header-compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #7a1f16 !important;
+  padding: 0 12px !important;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+/* 表格比畫面寬時在表格裡面左右滑動，不會把整個頁面撐寬 */
+.ant-table-container {
+  overflow-x: auto;
+}
+
+@media (max-width: 767px) {
+  .ant-card .ant-card-body {
+    padding: 12px;
+  }
+  .ant-card .ant-card-head {
+    padding: 0 12px;
+  }
+  /* 單選按鈕（例如報名者類型、場次）放不下時換行，不要超出畫面 */
+  .ant-radio-group {
+    display: inline-flex;
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .ant-checkbox-group {
+    row-gap: 8px;
+  }
+  /* 送出按鈕固定在畫面底部，填完表單不用再捲回去找。
+     antd 的 Space 會把每個區塊包一層 .ant-space-item，sticky 要設在這層外框上，
+     否則只會在跟自己一樣大的外框裡「固定」，等於沒效果 */
+  .ant-space-item:has(> .submit-bar) {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+  }
+  .submit-bar {
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.12);
+  }
+  .submit-bar .ant-btn {
+    width: 100%;
+  }
+  .ant-modal {
+    top: 12px;
+  }
+  .ant-picker-dropdown .ant-picker-panels {
+    flex-direction: column;
+  }
+}

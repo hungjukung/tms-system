@@ -3,7 +3,11 @@ import {
   CeremonyReportDto,
   CeremonySeatDto,
   CreateCeremonyRequest,
+  DuplicateCheckRequest,
+  DuplicateCheckResponse,
   MemberHistoryEntryDto,
+  MovePilgrimageBookingRequest,
+  MovePilgrimageBookingResponse,
   RegisterCeremonyCombinedResponse,
   RegisterCeremonyRequest,
   UpdateCeremonyRequest,
@@ -58,4 +62,25 @@ export async function registerCeremonyCombined(
 /** 供「活動報名」頁在送出並開立收據前，從加入清單中移除某筆尚未送出的報名項目使用 */
 export async function cancelRegistration(registrationId: string): Promise<void> {
   await apiClient.delete(`/ceremony/registrations/${registrationId}`);
+}
+
+/** 報名前檢查重複：這些信徒或臨櫃姓名在這個活動是否已經報名過（已作廢的不算） */
+export async function checkDuplicateRegistrations(
+  ceremonyId: string,
+  dto: DuplicateCheckRequest,
+): Promise<DuplicateCheckResponse> {
+  const res = await apiClient.post<DuplicateCheckResponse>(`/ceremony/ceremonies/${ceremonyId}/duplicate-check`, dto);
+  return res.data;
+}
+
+/** 總幹事調整已報名的進香：同一間房的人一起換房型和／或車次 */
+export async function movePilgrimageBooking(
+  registrationId: string,
+  dto: MovePilgrimageBookingRequest,
+): Promise<MovePilgrimageBookingResponse> {
+  const res = await apiClient.patch<MovePilgrimageBookingResponse>(
+    `/ceremony/registrations/${registrationId}/pilgrimage-booking`,
+    dto,
+  );
+  return res.data;
 }

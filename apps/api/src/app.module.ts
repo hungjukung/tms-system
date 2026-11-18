@@ -15,6 +15,8 @@ import { MemberAdminModule } from "./household/member-admin.module";
 import { ActivitiesModule } from "./activities/activities.module";
 import { GiftModule } from "./gift/gift.module";
 import { Gift } from "./gift/entities/gift.entity";
+import { AuditLog } from "./audit/entities/audit-log.entity";
+import { AuditModule } from "./audit/audit.module";
 import { User } from "./auth/entities/user.entity";
 import { Household } from "./household/entities/household.entity";
 import { Member } from "./household/entities/member.entity";
@@ -64,6 +66,7 @@ import { Temple } from "./settings/entities/temple.entity";
           InventoryTransaction,
           Temple,
           Gift,
+          AuditLog,
         ],
       }),
     }),
@@ -73,6 +76,7 @@ import { Temple } from "./settings/entities/temple.entity";
     PrintModule,
     FinanceModule,
     CeremonyModule,
+    AuditModule,
     InventoryModule,
     SettingsModule,
     MemberAdminModule,

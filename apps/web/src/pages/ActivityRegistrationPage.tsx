@@ -47,7 +47,7 @@ import {
   UserRole,
 } from "@tms/shared";
 import { deleteReceipt, getWallSlots, listWalls, voidReceipt } from "../api/lantern";
-import { getCeremonySeats, listCeremonies } from "../api/ceremony";
+import { checkDuplicateRegistrations, getCeremonySeats, listCeremonies } from "../api/ceremony";
 import { submitActivities } from "../api/activities";
 import { getHouseholdMembers } from "../api/households";
 import { MemberSelect } from "../components/MemberSelect";
@@ -796,6 +796,20 @@ function CeremonySeatModal({
   );
 }
 
+/** 一筆活動報名請求裡涵蓋的人：已建檔信徒的 id 與臨櫃姓名（整戶報名另外帶入戶內成員 id） */
+function peopleInRequest(request: RegisterCeremonyRequest, householdMemberIds: string[] = []) {
+  const memberIds = [
+    request.memberId,
+    ...(request.passengerMemberIds ?? []).filter(Boolean),
+    ...householdMemberIds,
+  ].filter((id): id is string => !!id);
+  const names = [
+    request.walkInName?.trim(),
+    ...(request.passengerNames ?? []).map((n) => n.trim()).filter(Boolean),
+  ].filter((n): n is string => !!n);
+  return { memberIds, names };
+}
+
 function CeremonyRegistrationFields({
   ceremonies,
   pendingItems,
@@ -1033,6 +1047,48 @@ function CeremonyRegistrationFields({
       roomType: isMultiSeatMode && hasRooms ? roomTypeName : undefined,
       busNumber: isMultiSeatMode && hasBuses ? effectiveBus : undefined,
     };
+
+    // 重複報名提醒：這些人已經報名過這個活動（或已在本次收據加入過），先問櫃台是不是真的要再報一次
+    const householdIds = values.payerMode === "household" ? (householdMembersQuery.data ?? []).map((m) => m.id) : [];
+    const people = peopleInRequest(request, householdIds);
+    const duplicateLines: string[] = [];
+    for (const item of pendingItems.filter((i) => i.request.ceremonyId === request.ceremonyId)) {
+      const pending = peopleInRequest(item.request);
+      if (
+        pending.memberIds.some((id) => people.memberIds.includes(id)) ||
+        pending.names.some((n) => people.names.includes(n))
+      ) {
+        duplicateLines.push(`本次收據已加入：${item.displayLabel}`);
+      }
+    }
+    try {
+      const { duplicates } = await checkDuplicateRegistrations(request.ceremonyId, people);
+      duplicateLines.push(...duplicates.map((d) => `${d.name || "（未留姓名）"}　已報名（${d.detail}）`));
+    } catch {
+      // 檢查失敗（例如網路不穩）不擋報名，只是少了提醒
+    }
+    if (duplicateLines.length > 0) {
+      const proceed = await new Promise<boolean>((resolve) =>
+        modal.confirm({
+          title: "這些人已經報名過這個活動",
+          content: (
+            <div>
+              <ul style={{ paddingLeft: 20, margin: "8px 0" }}>
+                {duplicateLines.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+              <div>確定要再報名一次嗎？（同名同姓的不同人也會被列出，請核對）</div>
+            </div>
+          ),
+          okText: "確定要再報名",
+          cancelText: "取消",
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        }),
+      );
+      if (!proceed) return;
+    }
 
     const ceremonyName = selectedCeremony?.name ?? "";
     let displayLabel: string;
@@ -2144,8 +2200,8 @@ export function ActivityRegistrationPage() {
             pendingCeremonyItems.length > 0 ||
             pendingDonationItems.length > 0 ||
             pendingGiftItems.length > 0) && (
-            <Card>
-              <Space align="center" style={{ width: "100%", justifyContent: "space-between" }}>
+            <Card className="submit-bar">
+              <Space align="center" wrap style={{ width: "100%", justifyContent: "space-between" }}>
                 <Typography.Text strong>
                   預估合計金額：
                   <span style={{ fontSize: 20, color: "#a8071a" }}>NT$ {previewTotal.toLocaleString()}</span>

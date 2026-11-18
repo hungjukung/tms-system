@@ -782,6 +782,152 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       expect([a.status, b.status].sort()).toEqual([201, 409]);
       expect((await report(c.id)).registrationCount).toBe(40);
     });
+
+    describe("報名後調整房型／車次（總幹事）", () => {
+      const sameFeeRooms = [
+        { name: "雙人房", capacity: 2, fee: 3000, roomCount: 2 },
+        { name: "三人房", capacity: 3, fee: 3000, roomCount: 1 },
+        { name: "單人房", capacity: 1, fee: 3000, roomCount: 3 },
+        { name: "四人房", capacity: 4, fee: 2500, roomCount: 1 },
+      ];
+      const move = (registrationId: string, body: Record<string, unknown>, client = director) =>
+        client.patch(`/ceremony/registrations/${registrationId}/pilgrimage-booking`, body);
+      const regOf = async (ceremonyId: string, name: string) =>
+        (await report(ceremonyId)).registrations.find((r: { participantName: string }) => r.participantName === name);
+
+      it("整間房一起換到同價的房型、同時換車：原房間空出、收據備註更新、留下操作紀錄", async () => {
+        const c = await createPilgrimage({ busCount: 2, roomTypes: sameFeeRooms });
+        const submitted = await submitRegistrations([{ ...pilgrim(c.id, "雙人房", 3000, ["乙"], "甲"), busNumber: 1 }]).expect(201);
+        expect(submitted.body.receipt.items[0].note).toBe("第1車，雙人房｜甲、乙");
+        const target = await regOf(c.id, "乙"); // 從同行者那一筆調整，也是整間一起換
+
+        const res = await move(target.id, { roomType: "三人房", busNumber: 2 }).expect(200);
+        expect(res.body).toMatchObject({ roomType: "三人房", roomNumber: 1, busNumber: 2 });
+        expect(res.body.changes).toEqual(["車次 第1車 → 第2車", "房型 雙人房 第1間 → 三人房 第1間"]);
+
+        const r = await report(c.id);
+        expect(r.registrations.map((x: { participantName: string; roomType: string; roomNumber: number; busNumber: number }) => [x.participantName, x.roomType, x.roomNumber, x.busNumber])).toEqual([
+          ["甲", "三人房", 1, 2],
+          ["乙", "三人房", 1, 2],
+        ]);
+        expect(r.ceremony.busLoads).toEqual([0, 2]);
+        expect(Object.fromEntries(r.ceremony.roomTypes.map((x: { name: string; roomsBooked: number }) => [x.name, x.roomsBooked]))).toMatchObject({
+          雙人房: 0,
+          三人房: 1,
+        });
+        // 金額不變
+        expect(r.totalAmount).toBe(6000);
+
+        // 補印的收據備註跟著更新
+        const html = (await volunteer.get(`/print/receipt/${submitted.body.receipt.id}`).expect(200)).text;
+        expect(html).toContain("第2車，三人房｜甲、乙");
+        expect(html).not.toContain("雙人房");
+
+        const logs = (await director.get("/audit-logs?action=PILGRIMAGE_MOVE").expect(200)).body;
+        expect(logs.total).toBe(1);
+        expect(logs.items[0]).toMatchObject({ action: "PILGRIMAGE_MOVE", userName: "測試-DIRECTOR" });
+        expect(logs.items[0].summary).toContain("甲、乙（2 人）");
+        expect(logs.items[0].summary).toContain("房型 雙人房 第1間 → 三人房 第1間");
+      });
+
+      it("只換車次也可以；換回原本的房型或車次等於沒變更：400", async () => {
+        const c = await createPilgrimage({ busCount: 2, roomTypes: sameFeeRooms });
+        await submitRegistrations([{ ...pilgrim(c.id, "單人房", 3000, [], "甲"), busNumber: 1 }]).expect(201);
+        const reg = await regOf(c.id, "甲");
+        await move(reg.id, { busNumber: 2 }).expect(200);
+        expect((await regOf(c.id, "甲")).busNumber).toBe(2);
+        expect((await move(reg.id, { busNumber: 2, roomType: "單人房" }).expect(400)).body.message).toBe("沒有任何變更");
+        expect((await move(reg.id, {}).expect(400)).body.message).toBe("請選擇要調整的房型或車次");
+      });
+
+      it.each([
+        ["每人費用不同", { roomType: "四人房" }, 400, "雙人房與四人房每人費用不同（NT$ 3000／NT$ 2500），收據金額會不一致，請作廢收據後重新報名"],
+        ["新房型住不下", { roomType: "單人房" }, 400, "單人房每間最多 1 人，這一間有 2 人"],
+        ["房型不存在", { roomType: "豪華房" }, 400, "找不到此房型"],
+        ["車次超出範圍", { busNumber: 3 }, 400, "車次超出範圍（共 2 台）"],
+      ])("%s：資料不變", async (_label, body, status, message) => {
+        const c = await createPilgrimage({ busCount: 2, roomTypes: sameFeeRooms });
+        await submitRegistrations([{ ...pilgrim(c.id, "雙人房", 3000, ["乙"], "甲"), busNumber: 1 }]).expect(201);
+        const reg = await regOf(c.id, "甲");
+        const res = await move(reg.id, body).expect(status);
+        expect(res.body.message).toBe(message);
+        expect(await regOf(c.id, "甲")).toMatchObject({ roomType: "雙人房", roomNumber: 1, busNumber: 1 });
+      });
+
+      it("目標房型已訂滿、目標車次坐不下：409", async () => {
+        const c = await createPilgrimage({ busCount: 2, roomTypes: sameFeeRooms });
+        await submitRegistrations([{ ...pilgrim(c.id, "三人房", 3000, [], "先來的"), busNumber: 1 }]).expect(201);
+        await submitRegistrations([{ ...pilgrim(c.id, "雙人房", 3000, ["乙"], "甲"), busNumber: 1 }]).expect(201);
+        const reg = await regOf(c.id, "甲");
+        expect((await move(reg.id, { roomType: "三人房" }).expect(409)).body.message).toBe("三人房已訂滿（共 1 間）");
+
+        const bus = await createPilgrimage({ busCount: 2, roomTypes: [{ name: "通鋪", capacity: 45, fee: 0, roomCount: 10 }] });
+        const others = Array.from({ length: 38 }, (_, i) => `乘客${i + 1}`);
+        await submitRegistrations([{ ...pilgrim(bus.id, "通鋪", 0, others), busNumber: 2 }]).expect(201); // 第 2 車 39 人
+        await submitRegistrations([{ ...pilgrim(bus.id, "通鋪", 0, ["乙"], "甲"), busNumber: 1 }]).expect(201);
+        const busReg = await regOf(bus.id, "甲");
+        expect((await move(busReg.id, { busNumber: 2 }).expect(409)).body.message).toBe(
+          "第 2 車座位不足：每台 40 位，已報名 39 位，這一間有 2 人",
+        );
+      });
+
+      it("只有總幹事可以調整；不是進香活動 400；找不到報名 404", async () => {
+        const c = await createPilgrimage({ busCount: 2, roomTypes: sameFeeRooms });
+        await submitRegistrations([{ ...pilgrim(c.id, "雙人房", 3000, [], "甲"), busNumber: 1 }]).expect(201);
+        const reg = await regOf(c.id, "甲");
+        for (const role of [UserRole.VOLUNTEER, UserRole.FINANCE, UserRole.REGISTRAR, UserRole.VIEWER]) {
+          await move(reg.id, { busNumber: 2 }, api(app, fx.tokens[role])).expect(403);
+        }
+        const general = await createCeremony({ tableCount: 1, seatsPerTable: 2 });
+        const g = await volunteer.post("/ceremony/registrations", { ceremonyId: general.id, walkInName: "甲", amount: 0 }).expect(201);
+        expect((await move(g.body.registration.id, { busNumber: 1 }).expect(400)).body.message).toBe("只有進香活動可以調整房型與車次");
+        await move("00000000-0000-4000-8000-000000000000", { busNumber: 1 }).expect(404);
+      });
+    });
+
+    describe("重複報名檢查", () => {
+      const check = (ceremonyId: string, body: Record<string, unknown>) =>
+        volunteer.post(`/ceremony/ceremonies/${ceremonyId}/duplicate-check`, body);
+
+      it("同行的信徒、臨櫃姓名都查得到，並說明當時的房型與車次；作廢的不算", async () => {
+        const c = await createPilgrimage({ busCount: 2 });
+        const friend = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "李大華");
+        const res = await submitRegistrations([
+          {
+            ceremonyId: c.id,
+            walkInName: "王小明",
+            roomType: "雙人房",
+            amount: 6000,
+            busNumber: 2,
+            passengerMemberIds: ["", friend.id],
+            passengerNames: ["", ""],
+          },
+        ]).expect(201);
+
+        const found = (await check(c.id, { memberIds: [friend.id], names: ["王小明", "陌生人"] }).expect(201)).body;
+        expect(found.duplicates).toEqual([
+          { name: "王小明", detail: "雙人房 第1間　第2車" },
+          { name: "李大華", detail: "雙人房 第1間　第2車" },
+        ]);
+
+        await api(app, fx.tokens[UserRole.FINANCE]).post(`/lantern/receipts/${res.body.receipt.id}/void`, { reason: "取消" }).expect(201);
+        expect((await check(c.id, { memberIds: [friend.id], names: ["王小明"] }).expect(201)).body.duplicates).toEqual([]);
+      });
+
+      it("祭改顯示場次號碼；餐會顯示座位；沒有帶任何人回傳空陣列；活動不存在 404；格式錯誤 400", async () => {
+        const jigai = await createCeremony({ name: "祭改", kind: CeremonyKind.JIGAI, morningCapacity: 5, afternoonCapacity: 5 });
+        await submitRegistrations([{ ceremonyId: jigai.id, walkInName: "甲", amount: 0, session: "AM" }]).expect(201);
+        expect((await check(jigai.id, { names: [" 甲 "] }).expect(201)).body.duplicates).toEqual([{ name: "甲", detail: "上午場 1號" }]);
+
+        const dinner = await createCeremony({ tableCount: 2, seatsPerTable: 2 });
+        await volunteer.post("/ceremony/registrations", { ceremonyId: dinner.id, walkInName: "乙", amount: 0 }).expect(201);
+        expect((await check(dinner.id, { names: ["乙"] }).expect(201)).body.duplicates).toEqual([{ name: "乙", detail: "1桌1號" }]);
+
+        expect((await check(dinner.id, {}).expect(201)).body.duplicates).toEqual([]);
+        await check("00000000-0000-4000-8000-000000000000", { names: ["甲"] }).expect(404);
+        await check(dinner.id, { memberIds: ["not-a-uuid"] }).expect(400);
+      });
+    });
   });
 
   // ───────────────────────────── 活動報表 ─────────────────────────────

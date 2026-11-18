@@ -18,6 +18,7 @@ describe("CeremonyService（白箱）", () => {
   let ledgerRepo: MockRepo;
   let householdService: Record<string, jest.Mock>;
   let lanternService: Record<string, jest.Mock>;
+  let auditService: { record: jest.Mock };
   let service: CeremonyService;
   // 白箱測試需要直接呼叫 private 方法
   let internals: any;
@@ -71,7 +72,9 @@ describe("CeremonyService（白箱）", () => {
       getReceiptIdsBySource: jest.fn().mockResolvedValue(new Map()),
       getCeremonyDonationSummary: jest.fn().mockResolvedValue({ total: 0, items: [] }),
       getGiftsForCeremony: jest.fn().mockResolvedValue([]),
+      rewriteReceiptItemNotes: jest.fn().mockResolvedValue(0),
     };
+    auditService = { record: jest.fn().mockResolvedValue(undefined) };
     service = new CeremonyService(
       ceremonyRepo as never,
       registrationRepo as never,
@@ -79,6 +82,7 @@ describe("CeremonyService（白箱）", () => {
       ledgerRepo as never,
       householdService as never,
       lanternService as never,
+      auditService as never,
     );
     internals = service;
   });
@@ -1161,6 +1165,125 @@ describe("CeremonyService（白箱）", () => {
       ]);
       const report = await service.getCeremonyReport("c1");
       expect(report.registrations.map((r) => r.participantAddress)).toEqual(["嘉義縣", "台南市", null]);
+    });
+  });
+  // ───────────────────────────── 操作紀錄、調整房型車次、重複檢查 ─────────────────────────────
+  describe("活動的操作紀錄", () => {
+    const createDto = { templeId: "t1", name: "進香", date: "2099-01-01", feeMode: CeremonyFeeMode.FREE_WILL };
+
+    it("沒有帶操作人（例如內部呼叫）不記；有帶就記下建立的活動種類、名稱與日期", async () => {
+      await service.createCeremony(createDto as never);
+      expect(auditService.record).not.toHaveBeenCalled();
+      await service.createCeremony({ ...createDto, kind: CeremonyKind.JIGAI, morningCapacity: 1, afternoonCapacity: 1 } as never, "u1");
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "CEREMONY_CREATE", summary: "建立祭改「進香」（2099-01-01）", userId: "u1", templeId: "t1" }),
+      );
+    });
+
+    it("修改：只列出有變的欄位（前 → 後）；房型與收費方式也看得懂；都沒變就不記", async () => {
+      registrationRepo.qb.getRawOne.mockResolvedValue({ count: "0", total: null, seatsAssigned: "0", morning: "0", afternoon: "0" });
+      ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
+      await service.updateCeremony(
+        "c1",
+        { feeMode: CeremonyFeeMode.FIXED_AMOUNT, fixedAmount: 500, roomTypes: [{ ...DOUBLE_ROOM, roomCount: 3 }] } as never,
+        "u1",
+      );
+      const summary = auditService.record.mock.calls[0][0].summary as string;
+      expect(summary).toBe(
+        "修改活動「進香」：收費方式：隨喜 → 固定金額 NT$ 500；房型：雙人房（每間 2 人、每人 NT$ 3000、2 間） → 雙人房（每間 2 人、每人 NT$ 3000、3 間）",
+      );
+
+      auditService.record.mockClear();
+      ceremonyRepo.findOne.mockResolvedValue(general());
+      await service.updateCeremony("c1", { name: "中元普渡" } as never, "u1");
+      expect(auditService.record).not.toHaveBeenCalled();
+    });
+
+    it("刪除：記下名稱、日期與一併刪掉的報名筆數", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(general());
+      registrationRepo.count.mockResolvedValue(4);
+      await service.deleteCeremony("c1", true, "u1");
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "CEREMONY_DELETE", summary: "刪除餐會「中元普渡」（2099-01-01），連同 4 筆報名" }),
+      );
+    });
+  });
+
+  describe("進香收據備註與調整", () => {
+    it("buildPilgrimageNote：車次在前；多人列出姓名、1 人只印房型；沒有房型的多人印「參加者」", () => {
+      expect(internals.buildPilgrimageNote(2, "雙人房", ["甲", "乙"])).toBe("第2車，雙人房｜甲、乙");
+      expect(internals.buildPilgrimageNote(1, "雙人房", ["甲"])).toBe("第1車，雙人房");
+      expect(internals.buildPilgrimageNote(null, null, ["甲", "乙"])).toBe("參加者｜甲、乙");
+      expect(internals.buildPilgrimageNote(null, null, ["甲"])).toBeUndefined();
+    });
+
+    const booked = (overrides: object = {}) => ({
+      id: "r1",
+      ceremonyId: "c1",
+      walkInName: "甲",
+      roomType: "雙人房",
+      roomNumber: 1,
+      busNumber: 1,
+      ...overrides,
+    });
+
+    it("調整後改寫收據備註：保留原本的參加者名單，只換車次與房型", async () => {
+      const ceremony = pilgrimage({ busCount: 2 });
+      registrationRepo.findOne.mockResolvedValue(booked());
+      ceremonyRepo.findOne.mockResolvedValue(ceremony);
+      registrationRepo.txManager.findOne.mockResolvedValue(ceremony);
+      (registrationRepo.txManager as any).find = jest.fn().mockResolvedValue([booked(), booked({ id: "r2", walkInName: "乙" })]);
+      (registrationRepo.txManager as any).update = jest.fn().mockResolvedValue(undefined);
+
+      await service.movePilgrimageBooking("r1", { busNumber: 2 }, "u1");
+      const rewrite = lanternService.rewriteReceiptItemNotes.mock.calls[0][2] as (note?: string) => string | undefined;
+      expect(lanternService.rewriteReceiptItemNotes.mock.calls[0][1]).toEqual(["r1", "r2"]);
+      expect(rewrite("第1車，雙人房｜甲、乙")).toBe("第2車，雙人房｜甲、乙");
+      // 改版前沒有車次的舊備註、只有房型的單人備註也能正確改寫
+      expect(rewrite("雙人房｜甲、乙")).toBe("第2車，雙人房｜甲、乙");
+      expect(rewrite("第1車，雙人房")).toBe("第2車，雙人房");
+      expect(auditService.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "PILGRIMAGE_MOVE", summary: "調整「進香」甲、乙（2 人）：車次 第1車 → 第2車" }),
+      );
+    });
+
+    it.each([
+      ["找不到報名", null, pilgrimage(), {}, "找不到報名紀錄"],
+      ["不是進香", booked(), general(), { busNumber: 2 }, "只有進香活動可以調整房型與車次"],
+      ["什麼都沒選", booked(), pilgrimage(), {}, "請選擇要調整的房型或車次"],
+      ["沒有房型的舊資料換房型", booked({ roomType: null }), pilgrimage(), { roomType: "雙人房" }, "這筆報名沒有房型，無法更換房型"],
+    ])("%s：擋下且不開交易", async (_label, registration, ceremony, dto, message) => {
+      registrationRepo.findOne.mockResolvedValue(registration);
+      ceremonyRepo.findOne.mockResolvedValue(ceremony);
+      await expect(service.movePilgrimageBooking("r1", dto as never, "u1")).rejects.toThrow(message);
+      expect(registrationRepo.manager.transaction).not.toHaveBeenCalled();
+      expect(auditService.record).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("重複報名檢查（findDuplicateRegistrations）", () => {
+    it("活動不存在 404；沒有任何人就不查資料庫", async () => {
+      await expect(service.findDuplicateRegistrations("c1", [MEMBER_A], [])).rejects.toThrow(NotFoundException);
+      ceremonyRepo.findOne.mockResolvedValue(general());
+      expect(await service.findDuplicateRegistrations("c1", [], ["  ", ""])).toEqual({ duplicates: [] });
+      expect(registrationRepo.find).not.toHaveBeenCalled();
+    });
+
+    it("排除已作廢；同一人同一位置只列一次；信徒顯示信徒姓名", async () => {
+      ceremonyRepo.findOne.mockResolvedValue(pilgrimage());
+      registrationRepo.find.mockResolvedValue([
+        { id: "a", memberId: MEMBER_A, walkInName: null, roomType: "雙人房", roomNumber: 1, busNumber: 1 },
+        { id: "b", memberId: MEMBER_A, walkInName: null, roomType: "雙人房", roomNumber: 1, busNumber: 1 },
+        { id: "c", memberId: null, walkInName: "臨櫃", roomType: "雙人房", roomNumber: 2, busNumber: null },
+        { id: "d", memberId: null, walkInName: "作廢的", roomType: "雙人房", roomNumber: 3, busNumber: 1 },
+      ]);
+      lanternService.getVoidedSourceIds.mockResolvedValue(new Set(["d"]));
+      householdService.findMembersByIds.mockResolvedValue(new Map([[MEMBER_A, { name: "王小明" }]]));
+      const result = await service.findDuplicateRegistrations("c1", [MEMBER_A], ["臨櫃", "作廢的"]);
+      expect(result.duplicates).toEqual([
+        { name: "王小明", detail: "雙人房 第1間　第1車" },
+        { name: "臨櫃", detail: "雙人房 第2間" },
+      ]);
     });
   });
 });

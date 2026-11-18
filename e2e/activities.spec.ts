@@ -382,6 +382,113 @@ test.describe("活動建立與報名", () => {
     expect(rowsOf("收禮資訊")).toContainEqual(["陳太太", "鮮花", 2, expect.any(String)]);
   });
 
+  test("總幹事在活動詳情調整一間房的房型與車次 → 名單更新 → 操作紀錄看得到；列印車次名單", async ({ page, request }) => {
+    const api = await apiAs(request, "director");
+    const name = `進香調整-${Date.now()}`;
+    const ceremony = await api.post("/ceremony/ceremonies", {
+      templeId: await api.templeId(),
+      name,
+      date: futureDate(),
+      feeMode: "FREE_WILL",
+      kind: "PILGRIMAGE",
+      busCount: 2,
+      roomTypes: [
+        { name: "雙人房", capacity: 2, fee: 3000, roomCount: 5 },
+        { name: "三人房", capacity: 3, fee: 3000, roomCount: 5 },
+        { name: "四人房", capacity: 4, fee: 2500, roomCount: 5 },
+      ],
+    });
+    await api.post("/activities/submit", {
+      pendingCeremonyRegistrations: [
+        {
+          ceremonyId: ceremony.id,
+          walkInName: "阿土伯",
+          roomType: "雙人房",
+          busNumber: 1,
+          amount: 6000,
+          passengerMemberIds: ["", ""],
+          passengerNames: ["", "阿土嫂"],
+        },
+      ],
+    });
+
+    await loginWithTemple(page, "director");
+    await page.locator(".ant-menu").getByText("建立活動", { exact: true }).click();
+    await radioButton(page, /^進香$/).click();
+    await page.locator(".ant-table-row", { hasText: name }).getByText(name, { exact: true }).click();
+    const detail = page.locator(".ant-modal", { hasText: `活動詳情：${name}` });
+    const row = (who: string) => detail.locator(".ant-table-row", { hasText: who });
+    await expect(row("阿土嫂")).toContainText("第1車 雙人房 第1間");
+
+    await row("阿土嫂").getByRole("button", { name: "調整房型／車次" }).click();
+    const moveModal = page.locator(".ant-modal").filter({ has: page.locator(".ant-modal-title", { hasText: "調整房型／車次" }) });
+    const moveSelect = (label: string) => moveModal.locator(".ant-form-item", { hasText: label }).locator(".ant-select-selector");
+    await expect(moveModal).toContainText("同一間房的人會一起調整：阿土伯、阿土嫂");
+    // 每人費用不同的四人房不能選
+    await moveSelect("房型（目前").click();
+    await expect(page.locator(".ant-select-dropdown:visible .ant-select-item-option-disabled", { hasText: "四人房" })).toContainText(
+      "每人費用不同",
+    );
+    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: "三人房" }).click();
+    await moveSelect("車次（目前").click();
+    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: "第 2 車" }).click();
+    await moveModal.getByRole("button", { name: "確認調整" }).click();
+
+    await expect(page.getByText(/已調整：車次 第1車 → 第2車；房型 雙人房 第1間 → 三人房 第1間/)).toBeVisible();
+    await expect(row("阿土伯")).toContainText("第2車 三人房 第1間");
+    await expect(row("阿土嫂")).toContainText("第2車 三人房 第1間");
+
+    // 列印車次名單：第 1 車已經沒人、第 2 車有兩位
+    const popupPromise = page.waitForEvent("popup");
+    await detail.getByRole("button", { name: "列印車次名單" }).click();
+    const printed = await popupPromise;
+    await expect(printed.locator("body")).toContainText("第1車名單");
+    await expect(printed.locator("section.page").nth(1)).toContainText("阿土伯");
+    await expect(printed.locator("section.page").nth(1)).toContainText("共 2 人");
+    await printed.close();
+
+    // 操作紀錄頁
+    await detail.getByRole("button", { name: "Close" }).click();
+    await page.locator(".ant-menu").getByText("操作紀錄", { exact: true }).click();
+    const logRow = page.locator(".ant-table-row", { hasText: name }).first();
+    await expect(logRow).toContainText("調整進香房型／車次");
+    await expect(logRow).toContainText("阿土伯、阿土嫂（2 人）");
+    await expect(logRow).toContainText("王總幹事");
+  });
+
+  test("同一個人再報名同一個活動：先跳出提醒，取消就不加入，確定才加入", async ({ page, request }) => {
+    const api = await apiAs(request, "director");
+    const name = `重複提醒-${Date.now()}`;
+    const ceremony = await api.post("/ceremony/ceremonies", {
+      templeId: await api.templeId(),
+      name,
+      date: futureDate(),
+      feeMode: "FREE_WILL",
+    });
+    await api.post("/activities/submit", {
+      pendingCeremonyRegistrations: [{ ceremonyId: ceremony.id, walkInName: "王小明", amount: 500 }],
+    });
+
+    await loginWithTemple(page, "volunteer");
+    await openCeremonyRegistration(page, name);
+    const fillWalkIn = async () => {
+      await radioButton(page, "臨櫃香客（免建檔）").click();
+      await page.getByLabel("姓名", { exact: true }).fill("王小明");
+      await page.getByRole("spinbutton", { name: "金額" }).fill("500");
+      await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
+    };
+
+    await fillWalkIn();
+    const confirm = page.locator(".ant-modal-confirm", { hasText: "這些人已經報名過這個活動" });
+    await expect(confirm).toContainText("王小明　已報名（已報名）");
+    await confirm.getByRole("button", { name: /取\s*消/ }).click();
+    await expect(page.getByText(`${name}（王小明）`)).toHaveCount(0);
+
+    await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
+    await page.locator(".ant-modal-confirm", { hasText: "這些人已經報名過這個活動" }).getByRole("button", { name: "確定要再報名" }).click();
+    await expect(page.getByText(`${name}（王小明）`)).toBeVisible();
+  });
+
   test("唯讀帳號可以瀏覽頁面，但送出報名會被擋下", async ({ page, request }) => {
     const api = await apiAs(request, "director");
     const name = `唯讀測試-${Date.now()}`;
