@@ -85,7 +85,11 @@ function registrationSeatText(r: CeremonyRegistrationDto, kind: CeremonyKind): s
   if (r.queueNumber != null) {
     return `${r.session === CeremonySession.AM ? "上午場" : r.session === CeremonySession.PM ? "下午場" : ""} ${r.queueNumber}號`.trim();
   }
-  if (r.roomType) return r.roomNumber != null ? `${r.roomType} 第${r.roomNumber}間` : r.roomType;
+  if (r.roomType) {
+    const room = r.roomNumber != null ? `${r.roomType} 第${r.roomNumber}間` : r.roomType;
+    return r.busNumber != null ? `第${r.busNumber}車 ${room}` : room;
+  }
+  if (kind === CeremonyKind.PILGRIMAGE && r.busNumber != null) return `第${r.busNumber}車`;
   if (!r.seatNumber) return "-";
   if (kind === CeremonyKind.PILGRIMAGE) {
     const [row, seat] = r.seatNumber.split("-");
@@ -143,7 +147,7 @@ function RoomTypesField() {
 function BusCountField({ min = 1, registered }: { min?: number; registered?: number }) {
   return (
     <Form.Item
-      label={`遊覽車台數（每台 ${PILGRIMAGE_BUS_SEAT_COUNT} 座，坐滿就不能再報名${registered != null ? `；目前已報名 ${registered} 人` : ""}）`}
+      label={`遊覽車台數（每台 ${PILGRIMAGE_BUS_SEAT_COUNT} 座，報名時選車次，該車坐滿就不能再選${registered != null ? `；目前已報名 ${registered} 人，已有人報名的車次不能刪除` : ""}）`}
       name="busCount"
       rules={[{ required: true, message: "請輸入遊覽車台數" }]}
     >
@@ -370,7 +374,7 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
         {isPilgrimage ? (
           <>
             <BusCountField
-              min={Math.max(1, Math.ceil(ceremony.registrationCount / PILGRIMAGE_BUS_SEAT_COUNT))}
+              min={Math.max(1, ...(ceremony.busLoads ?? []).map((n, i) => (n > 0 ? i + 1 : 0)))}
               registered={ceremony.registrationCount}
             />
             <RoomTypesField />
@@ -543,6 +547,9 @@ function CeremonyListCard({ templeId }: { templeId: string }) {
                   {record.busCapacity != null && (
                     <Tag color={record.registrationCount >= record.busCapacity ? "red" : "green"}>
                       遊覽車 {record.registrationCount}/{record.busCapacity} 人
+                      {record.busLoads && record.busLoads.length > 1
+                        ? `（${record.busLoads.map((n, i) => `第${i + 1}車 ${n}`).join("、")}）`
+                        : ""}
                     </Tag>
                   )}
                   {record.roomTypes?.map((r) => (
@@ -749,7 +756,11 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
           )}
           {isPilgrimage && ceremony.busCapacity != null && (
             <Descriptions.Item label="遊覽車" span={2}>
-              已報名 {ceremony.registrationCount} / {ceremony.busCapacity} 人（{ceremony.busCount} 台 × {PILGRIMAGE_BUS_SEAT_COUNT} 座）
+              已報名 {ceremony.registrationCount} / {ceremony.busCapacity} 人（{ceremony.busCount} 台 × {PILGRIMAGE_BUS_SEAT_COUNT} 座
+              {ceremony.busLoads && ceremony.busLoads.length > 1
+                ? `：${ceremony.busLoads.map((n, i) => `第${i + 1}車 ${n}/${PILGRIMAGE_BUS_SEAT_COUNT}`).join("、")}`
+                : ""}
+              ）
             </Descriptions.Item>
           )}
           {isPilgrimage && !!ceremony.roomTypes?.length && (

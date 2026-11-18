@@ -74,4 +74,10 @@ export class RegisterCeremonyDto {
   @IsOptional()
   @IsString()
   roomType?: string;
+
+  /** 進香：搭乘的車次（第幾車） */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  busNumber?: number;
 }

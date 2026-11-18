@@ -144,11 +144,11 @@ export class CeremonyService {
     if (dto.registrationDeadline !== undefined) ceremony.registrationDeadline = dto.registrationDeadline;
     if (ceremony.kind === CeremonyKind.PILGRIMAGE) {
       if (dto.busCount != null) {
-        const registered = await this.registrationRepo.count({ where: { ceremonyId: id } });
-        if (dto.busCount * PILGRIMAGE_BUS_SEAT_COUNT < registered) {
-          throw new BadRequestException(
-            `已有 ${registered} 人報名，遊覽車至少需要 ${Math.ceil(registered / PILGRIMAGE_BUS_SEAT_COUNT)} 台`,
-          );
+        // 已有人報名的車次不能被拿掉：台數不可少於最大的有人車次
+        const loads = (await this.getBusLoadsByCeremony([id])).get(id) ?? new Map<number, number>();
+        const maxUsedBus = Math.max(0, ...loads.keys());
+        if (dto.busCount < maxUsedBus) {
+          throw new BadRequestException(`第 ${maxUsedBus} 車已有人報名，遊覽車至少需要 ${maxUsedBus} 台`);
         }
         ceremony.busCount = dto.busCount;
       }
@@ -183,8 +183,10 @@ export class CeremonyService {
     morningRegistered: number;
     afternoonRegistered: number;
     roomsBooked: Map<string, number>;
+    busLoads: Map<number, number>;
   }> {
     const roomsBooked = (await this.getRoomsBookedByCeremony([ceremonyId])).get(ceremonyId) ?? new Map();
+    const busLoads = (await this.getBusLoadsByCeremony([ceremonyId])).get(ceremonyId) ?? new Map<number, number>();
     const row = await this.registrationRepo
       .createQueryBuilder("r")
       .select("COUNT(*)", "count")
@@ -202,7 +204,29 @@ export class CeremonyService {
       totalAmount: Number(row?.total ?? 0),
       seatsAssigned: Number(row?.seatsAssigned ?? 0),
       roomsBooked,
+      busLoads,
     };
+  }
+
+  /** 各活動每個車次已報名幾人（沒有車次的報名不算） */
+  private async getBusLoadsByCeremony(ceremonyIds: string[]): Promise<Map<string, Map<number, number>>> {
+    const result = new Map<string, Map<number, number>>();
+    if (ceremonyIds.length === 0) return result;
+    const rows = await this.registrationRepo
+      .createQueryBuilder("r")
+      .select('r."ceremonyId"', "ceremonyId")
+      .addSelect('r."busNumber"', "busNumber")
+      .addSelect("COUNT(*)", "people")
+      .where('r."ceremonyId" IN (:...ceremonyIds)', { ceremonyIds })
+      .andWhere('r."busNumber" IS NOT NULL')
+      .groupBy('r."ceremonyId"')
+      .addGroupBy('r."busNumber"')
+      .getRawMany<{ ceremonyId: string; busNumber: number; people: string }>();
+    for (const row of rows) {
+      if (!result.has(row.ceremonyId)) result.set(row.ceremonyId, new Map());
+      result.get(row.ceremonyId)!.set(Number(row.busNumber), Number(row.people));
+    }
+    return result;
   }
 
   /** 各活動每個房型已訂幾間（同一間房的參加者第幾間相同，所以算不重複的第幾間） */
@@ -493,6 +517,20 @@ export class CeremonyService {
     return { ...room, roomCount: room.roomCount ?? null };
   }
 
+  /**
+   * 進香車次：活動有遊覽車時，只有 1 台就自動是第 1 車，2 台以上必須選擇 1～台數之間的車次；
+   * 活動沒設台數（舊資料）時沒有車次。回傳車次或 null。
+   */
+  private resolveBusNumber(ceremony: Ceremony, dto: RegisterCeremonyDto): number | null {
+    if (!ceremony.busCount) return null;
+    const busNumber = dto.busNumber ?? (ceremony.busCount === 1 ? 1 : undefined);
+    if (busNumber == null) throw new BadRequestException("請選擇車次");
+    if (!Number.isInteger(busNumber) || busNumber < 1 || busNumber > ceremony.busCount) {
+      throw new BadRequestException(`車次超出範圍（共 ${ceremony.busCount} 台）`);
+    }
+    return busNumber;
+  }
+
   /** 取該房型最小的空房號（從第 1 間起）；房間數有上限且已訂滿時回傳 null */
   private pickRoomNumber(used: Set<number>, roomCount: number | null): number | null {
     for (let n = 1; roomCount == null || n <= roomCount; n++) {
@@ -559,6 +597,8 @@ export class CeremonyService {
     const headcount = Math.max(1, dto.passengerMemberIds?.length ?? 0, dto.passengerNames?.length ?? 0);
     const room = this.resolveRoomType(ceremony, dto, headcount);
     if (!room) this.assertAmountMatchesFixedFee(ceremony, dto.amount, headcount);
+    const chosenBus = this.resolveBusNumber(ceremony, dto);
+    const busLabel = chosenBus != null ? `第${chosenBus}車` : "";
 
     // 每位參加者對應的信徒 id：第 1 位是報名者本人，其餘是同行參加者（空字串代表臨櫃、沒有對應信徒）
     const participantMemberIds = Array.from({ length: headcount }, (_, i) =>
@@ -588,12 +628,13 @@ export class CeremonyService {
         lock: { mode: "pessimistic_write" },
       });
       if (!locked) throw new NotFoundException("找不到活動");
-      if (locked.busCount) {
-        const capacity = locked.busCount * PILGRIMAGE_BUS_SEAT_COUNT;
-        const registered = await manager.count(CeremonyRegistration, { where: { ceremonyId: ceremony.id } });
-        if (registered + headcount > capacity) {
+      // 車次以鎖住後的活動為準重新檢查（鎖之前台數可能被改過），再算該車次剩幾個座位
+      const busNumber = this.resolveBusNumber(locked, dto);
+      if (busNumber != null) {
+        const onBus = await manager.count(CeremonyRegistration, { where: { ceremonyId: ceremony.id, busNumber } });
+        if (onBus + headcount > PILGRIMAGE_BUS_SEAT_COUNT) {
           throw new ConflictException(
-            `遊覽車座位不足：${locked.busCount} 台共 ${capacity} 位，已報名 ${registered} 位，剩 ${Math.max(capacity - registered, 0)} 位`,
+            `第 ${busNumber} 車座位不足：每台 ${PILGRIMAGE_BUS_SEAT_COUNT} 位，已報名 ${onBus} 位，剩 ${Math.max(PILGRIMAGE_BUS_SEAT_COUNT - onBus, 0)} 位`,
           );
         }
       }
@@ -621,6 +662,7 @@ export class CeremonyService {
               wishText: isMain ? (dto.wishText ?? null) : null,
               roomType: room?.name ?? null,
               roomNumber,
+              busNumber,
               createdByUserId: userId,
             }),
           ),
@@ -636,13 +678,20 @@ export class CeremonyService {
       payerName,
       description: headcount > 1 ? `${ceremony.name}*${headcount}人` : ceremony.name,
       // 收據左邊：有房型印「雙人房｜甲、乙」（只有 1 人就只印房型），沒房型的多人報名印「參加者｜甲、乙」
-      note: room
-        ? headcount > 1
-          ? `${room.name}｜${namesText}`
-          : room.name
-        : headcount > 1
-          ? `參加者｜${namesText}`
-          : undefined,
+      // 收據左邊：先印車次，再印房型與參加者（例如「第2車，雙人房｜甲、乙」）
+      note:
+        [
+          busLabel,
+          room
+            ? headcount > 1
+              ? `${room.name}｜${namesText}`
+              : room.name
+            : headcount > 1
+              ? `參加者｜${namesText}`
+              : "",
+        ]
+          .filter(Boolean)
+          .join("，") || undefined,
       templeId: ceremony.templeId,
     };
   }
@@ -1111,6 +1160,7 @@ export class CeremonyService {
 
     const seatsAssigned = registrations.filter((r) => r.seatIndex != null).length;
     const roomsBooked = (await this.getRoomsBookedByCeremony([ceremonyId])).get(ceremonyId);
+    const busLoads = (await this.getBusLoadsByCeremony([ceremonyId])).get(ceremonyId);
 
     return {
       ceremony: this.toCeremonyDto(ceremony, {
@@ -1118,6 +1168,7 @@ export class CeremonyService {
         totalAmount,
         seatsAssigned,
         roomsBooked,
+        busLoads,
       }),
       totalAmount,
       registrationCount: registrations.length,
@@ -1153,6 +1204,7 @@ export class CeremonyService {
       morningRegistered?: number;
       afternoonRegistered?: number;
       roomsBooked?: Map<string, number>;
+      busLoads?: Map<number, number>;
     },
   ): CeremonyDto {
     return {
@@ -1184,6 +1236,9 @@ export class CeremonyService {
         : null,
       busCount: ceremony.busCount ?? null,
       busCapacity: ceremony.busCount ? ceremony.busCount * PILGRIMAGE_BUS_SEAT_COUNT : null,
+      busLoads: ceremony.busCount
+        ? Array.from({ length: ceremony.busCount }, (_, i) => stats?.busLoads?.get(i + 1) ?? 0)
+        : null,
       registrationCount: stats?.registrationCount ?? 0,
       totalAmount: stats?.totalAmount ?? 0,
     };
@@ -1213,6 +1268,7 @@ export class CeremonyService {
         afternoon: string;
       }>();
     const roomsBookedByCeremony = await this.getRoomsBookedByCeremony(ceremonyIds);
+    const busLoadsByCeremony = await this.getBusLoadsByCeremony(ceremonyIds);
     const statsMap = new Map(
       rows.map((r) => [
         r.ceremonyId,
@@ -1223,6 +1279,7 @@ export class CeremonyService {
           morningRegistered: Number(r.morning),
           afternoonRegistered: Number(r.afternoon),
           roomsBooked: roomsBookedByCeremony.get(r.ceremonyId),
+          busLoads: busLoadsByCeremony.get(r.ceremonyId),
         },
       ]),
     );
@@ -1252,6 +1309,7 @@ export class CeremonyService {
       queueNumber: registration.queueNumber ?? null,
       roomType: registration.roomType ?? null,
       roomNumber: registration.roomNumber ?? null,
+      busNumber: registration.busNumber ?? null,
       createdAt: registration.createdAt.toISOString(),
       receiptId,
     };

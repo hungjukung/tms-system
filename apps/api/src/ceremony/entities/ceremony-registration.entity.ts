@@ -59,6 +59,10 @@ export class CeremonyRegistration {
   @Column({ type: "int", nullable: true })
   roomNumber: number | null;
 
+  /** 進香：搭乘的車次（第幾車），每車座位數固定 PILGRIMAGE_BUS_SEAT_COUNT */
+  @Column({ type: "int", nullable: true })
+  busNumber: number | null;
+
   @Column()
   createdByUserId: string;
 

@@ -33,6 +33,7 @@ import {
   LANTERN_TYPE_OPTIONS,
   LanternSlotDto,
   LanternSlotStatus,
+  PILGRIMAGE_BUS_SEAT_COUNT,
   ReceiptDetailDto,
   ReceiptDto,
   ReceiptSourceType,
@@ -674,6 +675,7 @@ function CeremonyRegistrationFields({
   const session = Form.useWatch("session", form) as CeremonySession | undefined;
   const participants = Form.useWatch("participants", form) as PilgrimParticipant[] | undefined;
   const roomTypeName = Form.useWatch("roomType", form) as string | undefined;
+  const busNumberValue = Form.useWatch("busNumber", form) as number | undefined;
   const selectedCeremony = ceremonies.find((c) => c.id === ceremonyId);
   const [seatModalOpen, setSeatModalOpen] = useState(false);
   const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
@@ -724,14 +726,19 @@ function CeremonyRegistrationFields({
   const pendingRoomsOf = (name: string) => pendingPilgrimage.filter((item) => item.request.roomType === name).length;
   const roomsLeftOf = (r: (typeof roomTypes)[number]) =>
     r.roomCount == null ? null : r.roomCount - r.roomsBooked - pendingRoomsOf(r.name);
-  const pendingParticipants = pendingPilgrimage.reduce(
-    (sum, item) => sum + Math.max(1, item.request.passengerMemberIds?.length ?? 0),
-    0,
-  );
-  const busSeatsLeft =
-    isPilgrimage && selectedCeremony?.busCapacity != null
-      ? selectedCeremony.busCapacity - selectedCeremony.registrationCount - pendingParticipants
-      : null;
+  // 遊覽車車次：只有 1 台時自動是第 1 車，2 台以上由報名者選；每車固定 PILGRIMAGE_BUS_SEAT_COUNT 位
+  const busCount = isPilgrimage ? (selectedCeremony?.busCount ?? 0) : 0;
+  const hasBuses = busCount > 0;
+  const multiBus = busCount > 1;
+  const effectiveBus = hasBuses ? (busCount === 1 ? 1 : busNumberValue) : undefined;
+  const pendingBusOf = (item: PendingCeremonyItem) => item.request.busNumber ?? (busCount === 1 ? 1 : undefined);
+  const busLeftOf = (n: number) =>
+    PILGRIMAGE_BUS_SEAT_COUNT -
+    (selectedCeremony?.busLoads?.[n - 1] ?? 0) -
+    pendingPilgrimage
+      .filter((item) => pendingBusOf(item) === n)
+      .reduce((sum, item) => sum + Math.max(1, item.request.passengerMemberIds?.length ?? 0), 0);
+  const busSeatsLeft = effectiveBus != null ? busLeftOf(effectiveBus) : null;
   const overRoomCapacity = !!selectedRoom && participantCount > selectedRoom.capacity;
   const overBusCapacity = busSeatsLeft != null && participantCount > busSeatsLeft;
   // 本次收據已加入、尚未送出的座位，在選位圖上顯示成已有人，避免重複選到
@@ -787,7 +794,11 @@ function CeremonyRegistrationFields({
     (payerMode === "household"
       ? !!householdId && headcount > 0
       : isMultiSeatMode
-        ? participantCount > 0 && (!hasRooms || !!selectedRoom) && !overRoomCapacity && !overBusCapacity
+        ? participantCount > 0 &&
+          (!hasRooms || !!selectedRoom) &&
+          (!multiBus || !!effectiveBus) &&
+          !overRoomCapacity &&
+          !overBusCapacity
         : payerMode === "walkIn"
           ? !!walkInName
           : !!memberId) &&
@@ -822,8 +833,12 @@ function CeremonyRegistrationFields({
       }
     }
     if (isMultiSeatMode) {
+      if (multiBus && !effectiveBus) {
+        message.error("請選擇車次");
+        return;
+      }
       if (busSeatsLeft != null && plist.length > busSeatsLeft) {
-        message.error(`遊覽車座位不足，只剩 ${Math.max(busSeatsLeft, 0)} 位`);
+        message.error(`第 ${effectiveBus} 車座位不足，只剩 ${Math.max(busSeatsLeft, 0)} 位`);
         return;
       }
       const memberIds = plist.filter((pt) => !isWalkIn(pt)).map((pt) => pt.memberId as string);
@@ -867,6 +882,7 @@ function CeremonyRegistrationFields({
         (values.payerMode === "member" || values.payerMode === "walkIn") && values.noSeatNeeded ? true : undefined,
       session: isJigai ? values.session : undefined,
       roomType: isMultiSeatMode && hasRooms ? roomTypeName : undefined,
+      busNumber: isMultiSeatMode && hasBuses ? effectiveBus : undefined,
     };
 
     const ceremonyName = selectedCeremony?.name ?? "";
@@ -878,7 +894,7 @@ function CeremonyRegistrationFields({
       displayLabel = `${ceremonyName}（整戶 ${names}${householdSeatLabel ? `　${householdSeatLabel}` : ""}）`;
     } else if (isMultiSeatMode) {
       const namesText = plist.map((pt) => pilgrimParticipantName(pt)).join("、");
-      displayLabel = `${ceremonyName}（${selectedRoom ? `${selectedRoom.name}　` : ""}${namesText}）`;
+      displayLabel = `${ceremonyName}（${effectiveBus ? `第${effectiveBus}車　` : ""}${selectedRoom ? `${selectedRoom.name}　` : ""}${namesText}）`;
     } else {
       const payerName = values.payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
       displayLabel = `${ceremonyName}（${payerName}${
@@ -933,6 +949,7 @@ function CeremonyRegistrationFields({
       session: undefined,
       participants: [{ mode: "member" }],
       roomType: undefined,
+      busNumber: undefined,
     });
     setSelectedMemberName(undefined);
   };
@@ -974,6 +991,7 @@ function CeremonyRegistrationFields({
               form.setFieldValue("tableLabel", undefined);
               form.setFieldValue("session", undefined);
               form.setFieldValue("roomType", undefined);
+              form.setFieldValue("busNumber", undefined);
               form.setFieldValue("householdSeatIndexes", undefined);
               form.setFieldValue("householdSeatLabel", undefined);
             }}
@@ -994,12 +1012,30 @@ function CeremonyRegistrationFields({
             />
           </Form.Item>
         )}
-        {isPilgrimage && busSeatsLeft != null && (
+        {multiBus && (
+          <Form.Item label="車次" name="busNumber" rules={[{ required: true, message: "請選擇車次" }]}>
+            <Select
+              placeholder="請選擇車次"
+              options={Array.from({ length: busCount }, (_, i) => {
+                const left = busLeftOf(i + 1);
+                return {
+                  value: i + 1,
+                  label: `第 ${i + 1} 車（剩 ${Math.max(left, 0)} 位）`,
+                  disabled: left <= 0,
+                };
+              })}
+            />
+          </Form.Item>
+        )}
+        {hasBuses && (
           <Alert
-            type={busSeatsLeft > 0 ? "info" : "error"}
+            type={Array.from({ length: busCount }, (_, i) => busLeftOf(i + 1)).some((left) => left > 0) ? "info" : "error"}
             showIcon
             style={{ marginBottom: 16 }}
-            message={`遊覽車 ${selectedCeremony!.busCount} 台共 ${selectedCeremony!.busCapacity} 位，剩 ${Math.max(busSeatsLeft, 0)} 位`}
+            message={`遊覽車共 ${busCount} 台（每台 ${PILGRIMAGE_BUS_SEAT_COUNT} 位）：${Array.from(
+              { length: busCount },
+              (_, i) => `第 ${i + 1} 車剩 ${Math.max(busLeftOf(i + 1), 0)} 位`,
+            ).join("、")}`}
           />
         )}
         {isJigai && selectedCeremony && (
@@ -1093,7 +1129,9 @@ function CeremonyRegistrationFields({
                     </Typography.Text>
                   )}
                   {overBusCapacity && (
-                    <Typography.Text type="danger">遊覽車座位不足，只剩 {Math.max(busSeatsLeft ?? 0, 0)} 位</Typography.Text>
+                    <Typography.Text type="danger">
+                      第 {effectiveBus} 車座位不足，只剩 {Math.max(busSeatsLeft ?? 0, 0)} 位，請改選其他車次
+                    </Typography.Text>
                   )}
                   {(!selectedRoom || fields.length < selectedRoom.capacity) && (
                     <Button type="dashed" block onClick={() => add({ mode: "member" })}>

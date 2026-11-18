@@ -540,6 +540,8 @@ export interface CeremonyDto {
   /** 進香：遊覽車台數與可載人數（台數 × 每台座位數）；未設定時為 null */
   busCount: number | null;
   busCapacity: number | null;
+  /** 進香：每一車次已報名的人數（第 1 個元素是第 1 車），沒設定遊覽車時為 null */
+  busLoads: number[] | null;
   /** 供「建立活動」頁列表顯示：此活動至今累積的報名筆數與收款總額 */
   registrationCount: number;
   totalAmount: number;
@@ -595,6 +597,8 @@ export interface CeremonyRegistrationDto {
   /** 進香：所訂房型與第幾間（同一間房的參加者第幾間相同） */
   roomType: string | null;
   roomNumber: number | null;
+  /** 進香：搭乘的車次（第幾車） */
+  busNumber: number | null;
   createdAt: string;
   /** 這筆報名對應的收據 id（單筆或合併收據皆可能，找不到時為 null），供「報名名單」查看/刪除收據使用 */
   receiptId: string | null;
@@ -610,6 +614,8 @@ export interface RegisterCeremonyRequest {
   amount: number;
   /** 進香：所選房型名稱（活動有設定房型時必填） */
   roomType?: string;
+  /** 進香：搭乘的車次（第幾車）；活動有 2 台以上遊覽車時必填，只有 1 台時自動是第 1 車 */
+  busNumber?: number;
   wishText?: string;
   /** 手動選位時指定的座位流水號（1 起算）；未提供時由系統依序自動配發 */
   seatIndex?: number;

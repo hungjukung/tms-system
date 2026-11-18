@@ -128,7 +128,9 @@ test.describe("活動建立與報名", () => {
     const amount = page.getByRole("spinbutton", { name: "金額" });
     await expect(amount).toHaveValue("3000");
     await expect(amount).toBeDisabled();
-    await expect(page.getByText("遊覽車 1 台共 40 位，剩 40 位")).toBeVisible();
+    await expect(page.getByText("遊覽車共 1 台（每台 40 位）：第 1 車剩 40 位")).toBeVisible();
+    // 只有 1 台車不用選車次
+    await expect(page.getByLabel("車次", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /選擇遊覽車座位/ })).toHaveCount(0);
     await expect(radioButton(page, "整戶報名")).toHaveCount(0);
 
@@ -145,13 +147,13 @@ test.describe("活動建立與報名", () => {
     await expect(amount).toHaveValue("3000");
 
     await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
-    await expect(page.getByText(`${name}（雙人房　阿土伯）`)).toBeVisible();
+    await expect(page.getByText(`${name}（第1車　雙人房　阿土伯）`)).toBeVisible();
 
     // 3. 收據：金額是房費，左邊備註印房型
     const receipt = await submitAndGetReceipt(page);
     await expect(receipt.locator("body")).toContainText("阿土伯");
     await expect(receipt.locator("body")).toContainText("NT$ 3,000");
-    await expect(receipt.locator("body")).toContainText("雙人房");
+    await expect(receipt.locator("body")).toContainText("第1車，雙人房");
 
     // 4. 已訂間數與遊覽車人數都更新
     await page.locator(".ant-menu").getByText("建立活動", { exact: true }).click();
@@ -159,6 +161,58 @@ test.describe("活動建立與報名", () => {
     const rowAfter = page.locator(".ant-table-row", { hasText: name });
     await expect(rowAfter).toContainText("遊覽車 1/40 人");
     await expect(rowAfter).toContainText("雙人房 1/2 間");
+  });
+
+  test("進香：兩台遊覽車要選車次，車次坐滿就不能選，收據印車次", async ({ page, request }) => {
+    const api = await apiAs(request, "director");
+    const name = `進香車次-${Date.now()}`;
+    const ceremony = await api.post("/ceremony/ceremonies", {
+      templeId: await api.templeId(),
+      name,
+      date: futureDate(),
+      feeMode: "FREE_WILL",
+      kind: "PILGRIMAGE",
+      busCount: 2,
+      roomTypes: [{ name: "通鋪", capacity: 45, fee: 0, roomCount: 10 }],
+    });
+    // 第 1 車先坐滿 40 人
+    await api.post("/activities/submit", {
+      pendingCeremonyRegistrations: [
+        {
+          ceremonyId: ceremony.id,
+          walkInName: "領隊",
+          roomType: "通鋪",
+          busNumber: 1,
+          amount: 0,
+          passengerMemberIds: Array(40).fill(""),
+          passengerNames: ["", ...Array.from({ length: 39 }, (_, i) => `乘客${i + 1}`)],
+        },
+      ],
+    });
+
+    await loginWithTemple(page, "volunteer");
+    await openCeremonyRegistration(page, name);
+    await selectOption(page, "房型", "通鋪");
+
+    // 車次選單：第 1 車已滿不能選；沒選車次不能加入
+    await page.getByLabel("車次", { exact: true }).click();
+    await expect(
+      page.locator(".ant-select-dropdown:visible .ant-select-item-option-disabled", { hasText: "第 1 車" }),
+    ).toContainText("剩 0 位");
+    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: "第 2 車" }).click();
+    await expect(page.getByText(/第 1 車剩 0 位、第 2 車剩 40 位/)).toBeVisible();
+
+    const participant = (n: number) => page.locator(".ant-card-small", { hasText: `參加者 ${n}` });
+    await radioButton(participant(1), "臨櫃香客").click();
+    await participant(1).getByPlaceholder("姓名").fill("阿土伯");
+    await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
+    await expect(page.getByText(`${name}（第2車　通鋪　阿土伯）`)).toBeVisible();
+
+    const receipt = await submitAndGetReceipt(page);
+    await expect(receipt.locator("body")).toContainText("第2車，通鋪");
+
+    const report = await api.get(`/ceremony/ceremonies/${ceremony.id}/report`);
+    expect(report.ceremony.busLoads).toEqual([40, 1]);
   });
 
   test("進香：參加者不能超過房型每間人數；房型訂滿就不能選", async ({ page, request }) => {
@@ -202,7 +256,7 @@ test.describe("活動建立與報名", () => {
     await expect(page.getByRole("spinbutton", { name: "金額" })).toHaveValue("20800"); // 每人 5200 × 4 人
 
     await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
-    await expect(page.getByText(`${name}（四人房　甲、乙、丙、丁）`)).toBeVisible();
+    await expect(page.getByText(`${name}（第1車　四人房　甲、乙、丙、丁）`)).toBeVisible();
     const receipt = await submitAndGetReceipt(page);
     await expect(receipt.locator("body")).toContainText("NT$ 20,800");
     await expect(receipt.locator("body")).toContainText("四人房｜甲、乙、丙、丁");

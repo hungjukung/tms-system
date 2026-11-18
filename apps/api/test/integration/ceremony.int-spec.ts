@@ -527,7 +527,7 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       const c = await createPilgrimage();
       const res = await submitRegistrations([pilgrim(c.id, "雙人房", 3000)]).expect(201);
       expect(res.body.receipt).toMatchObject({ amount: 3000, payerName: "王小明" });
-      expect(res.body.receipt.items[0]).toMatchObject({ description: "進香", amount: 3000, note: "雙人房" });
+      expect(res.body.receipt.items[0]).toMatchObject({ description: "進香", amount: 3000, note: "第1車，雙人房" });
 
       const r = await report(c.id);
       expect(r.registrations).toEqual([
@@ -556,7 +556,7 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       expect(res.body.receipt.items[0]).toMatchObject({
         description: "進香*3人",
         amount: 15600,
-        note: "四人房｜王小明、李大華、陳小美",
+        note: "第1車，四人房｜王小明、李大華、陳小美",
       });
       expect(res.body.ceremonyRegistrations.map((r: { amount: number }) => r.amount)).toEqual([15600, 0, 0]);
 
@@ -578,7 +578,7 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
     it("臨櫃同行者沒填姓名：沿用報名者姓名", async () => {
       const c = await createPilgrimage();
       const res = await submitRegistrations([pilgrim(c.id, "雙人房", 3000, [""], "阿土伯")]).expect(201);
-      expect(res.body.receipt.items[0].note).toBe("雙人房｜阿土伯、阿土伯");
+      expect(res.body.receipt.items[0].note).toBe("第1車，雙人房｜阿土伯、阿土伯");
     });
 
     it.each([
@@ -627,7 +627,7 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       await submitRegistrations([pilgrim(c.id, "通鋪", 0, others(38))]).expect(201); // 39 人
 
       const over = await submitRegistrations([pilgrim(c.id, "通鋪", 0, ["乙"], "甲")]).expect(409);
-      expect(over.body.message).toBe("遊覽車座位不足：1 台共 40 位，已報名 39 位，剩 1 位");
+      expect(over.body.message).toBe("第 1 車座位不足：每台 40 位，已報名 39 位，剩 1 位");
       await submitRegistrations([pilgrim(c.id, "通鋪", 0, [], "甲")]).expect(201);
       await submitRegistrations([pilgrim(c.id, "通鋪", 0, [], "乙")]).expect(409);
       expect((await report(c.id)).registrationCount).toBe(40);
@@ -677,12 +677,69 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       await patch({ roomTypes: [rooms[0]] }).expect(200);
     });
 
-    it("編輯：遊覽車台數不能少於已報名人數需要的台數", async () => {
-      const c = await createPilgrimage({ busCount: 2, roomTypes: [{ name: "通鋪", capacity: 45, fee: 0, roomCount: 5 }] });
-      const others = Array.from({ length: 40 }, (_, i) => `乘客${i + 1}`);
-      await submitRegistrations([pilgrim(c.id, "通鋪", 0, others)]).expect(201); // 41 人，要 2 台
+    it("編輯：已有人報名的車次不能拿掉（台數不能少於最大的有人車次）", async () => {
+      const c = await createPilgrimage({ busCount: 3, roomTypes: [{ name: "通鋪", capacity: 45, fee: 0, roomCount: 5 }] });
+      await submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0), busNumber: 2 }]).expect(201);
       const res = await director.patch(`/ceremony/ceremonies/${c.id}`, { busCount: 1 }).expect(400);
-      expect(res.body.message).toBe("已有 41 人報名，遊覽車至少需要 2 台");
+      expect(res.body.message).toBe("第 2 車已有人報名，遊覽車至少需要 2 台");
+      // 第 3 車沒人，可以拿掉
+      await director.patch(`/ceremony/ceremonies/${c.id}`, { busCount: 2 }).expect(200);
+    });
+
+    describe("遊覽車車次", () => {
+      const roomsBig = [{ name: "通鋪", capacity: 45, fee: 0, roomCount: 20 }];
+      const names = (n: number) => Array.from({ length: n }, (_, i) => `乘客${i + 1}`);
+
+      it("只有 1 台車：不用選車次，自動是第 1 車；多台車：一定要選，而且要在 1～台數之間", async () => {
+        const single = await createPilgrimage();
+        const ok = await submitRegistrations([pilgrim(single.id, "雙人房", 3000)]).expect(201);
+        expect(ok.body.ceremonyRegistrations[0].busNumber).toBe(1);
+        await submitRegistrations([{ ...pilgrim(single.id, "雙人房", 3000), busNumber: 2 }]).expect(400);
+
+        const multi = await createPilgrimage({ busCount: 2 });
+        const missing = await submitRegistrations([pilgrim(multi.id, "雙人房", 3000)]).expect(400);
+        expect(missing.body.message).toBe("請選擇車次");
+        for (const busNumber of [0, 3]) {
+          await submitRegistrations([{ ...pilgrim(multi.id, "雙人房", 3000), busNumber }]).expect(400);
+        }
+        expect((await report(multi.id)).registrationCount).toBe(0);
+      });
+
+      it("每一車各自 40 位：第 1 車坐滿還可以坐第 2 車；收據與名單都帶車次", async () => {
+        const c = await createPilgrimage({ busCount: 2, roomTypes: roomsBig });
+        await submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0, names(39)), busNumber: 1 }]).expect(201); // 第 1 車 40 人
+        const full = await submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0, [], "甲"), busNumber: 1 }]).expect(409);
+        expect(full.body.message).toBe("第 1 車座位不足：每台 40 位，已報名 40 位，剩 0 位");
+
+        const res = await submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0, ["乙"], "甲"), busNumber: 2 }]).expect(201);
+        expect(res.body.receipt.items[0].note).toBe("第2車，通鋪｜甲、乙");
+
+        const r = await report(c.id);
+        expect(r.ceremony.busLoads).toEqual([40, 2]);
+        expect(r.registrations.filter((x: { busNumber: number }) => x.busNumber === 2).map((x: { participantName: string }) => x.participantName)).toEqual(["甲", "乙"]);
+      });
+
+      it("作廢收據後，那一車的座位會釋出", async () => {
+        const c = await createPilgrimage({ busCount: 2, roomTypes: roomsBig });
+        const res = await submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0, names(39)), busNumber: 2 }]).expect(201);
+        await submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0, [], "甲"), busNumber: 2 }]).expect(409);
+        await api(app, fx.tokens[UserRole.FINANCE])
+          .post(`/lantern/receipts/${res.body.receipt.id}/void`, { reason: "行程取消" })
+          .expect(201);
+        await submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0, [], "甲"), busNumber: 2 }]).expect(201);
+        expect((await report(c.id)).ceremony.busLoads).toEqual([0, 1]);
+      });
+
+      it("兩個櫃台同時搶同一車最後幾個座位：不會超過 40 位", async () => {
+        const c = await createPilgrimage({ busCount: 2, roomTypes: roomsBig });
+        await submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0, names(37)), busNumber: 1 }]).expect(201); // 第 1 車 38 人
+        const [a, b] = await Promise.all([
+          submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0, ["A2"], "A"), busNumber: 1 }]),
+          submitRegistrations([{ ...pilgrim(c.id, "通鋪", 0, ["B2"], "B"), busNumber: 1 }]),
+        ]);
+        expect([a.status, b.status].sort()).toEqual([201, 409]);
+        expect((await report(c.id)).ceremony.busLoads[0]).toBe(40);
+      });
     });
 
     it("編輯：間數不能少於已訂間數", async () => {
@@ -701,7 +758,7 @@ describe("活動建立與報名（黑箱／HTTP API）", () => {
       const res = await submitRegistrations([
         { ceremonyId: c.id, walkInName: "甲", amount: 500, passengerMemberIds: ["", ""], passengerNames: ["", "乙"] },
       ]).expect(201);
-      expect(res.body.receipt.items[0]).toMatchObject({ description: "進香*2人", note: "參加者｜甲、乙" });
+      expect(res.body.receipt.items[0]).toMatchObject({ description: "進香*2人", note: "第1車，參加者｜甲、乙" });
     });
 
     it("兩個櫃台同時搶最後一間房：只有一個成功", async () => {
