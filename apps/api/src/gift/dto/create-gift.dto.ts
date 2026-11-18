@@ -29,4 +29,9 @@ export class CreateGiftDto {
   @ValidateNested({ each: true })
   @Type(() => GiftItemDto)
   items: GiftItemDto[];
+
+  /** 送禮屬於哪個活動（選填） */
+  @IsOptional()
+  @IsUUID()
+  ceremonyId?: string;
 }

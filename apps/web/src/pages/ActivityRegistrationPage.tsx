@@ -28,6 +28,8 @@ import {
   CeremonySeatDto,
   ClaimHouseholdLanternSlotsRequest,
   ClaimLanternSlotRequest,
+  CreateDonationRequest,
+  CreateGiftRequest,
   DonationType,
   GiftType,
   LANTERN_TYPE_OPTIONS,
@@ -140,15 +142,96 @@ type PendingCeremonyItem = {
   request: RegisterCeremonyRequest;
 };
 
-function DonationFields({ form, ceremonies }: { form: any; ceremonies: CeremonyDto[] }) {
+/** 捐款、送禮「加入」後暫存在前端的項目（送出時才真正建立紀錄並開立收據） */
+type PendingDonationItem = { displayLabel: string; amount: number; request: CreateDonationRequest };
+type PendingGiftItem = { displayLabel: string; request: CreateGiftRequest };
+
+/** 已加入、尚未送出的項目清單，每筆可以移除 */
+function PendingItemsList({
+  title,
+  items,
+  onRemove,
+}: {
+  title: string;
+  items: { label: string; amount?: number }[];
+  onRemove: (index: number) => void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <Alert
+      type="success"
+      showIcon
+      style={{ marginTop: 16 }}
+      message={title}
+      description={
+        <Space direction="vertical" style={{ width: "100%" }}>
+          {items.map((item, i) => (
+            <Space key={i} align="center" wrap>
+              <span>
+                {item.label}
+                {item.amount != null ? `　NT$ ${item.amount.toLocaleString()}` : ""}
+              </span>
+              <Button size="small" danger onClick={() => onRemove(i)}>
+                移除
+              </Button>
+            </Space>
+          ))}
+        </Space>
+      }
+    />
+  );
+}
+
+function DonationFields({
+  form,
+  ceremonies,
+  templeId,
+  pendingItems,
+  onAddPending,
+  onRemovePending,
+}: {
+  form: any;
+  ceremonies: CeremonyDto[];
+  templeId: string;
+  pendingItems: PendingDonationItem[];
+  onAddPending: (item: PendingDonationItem) => void;
+  onRemovePending: (index: number) => void;
+}) {
   const { user } = useAuth();
+  const { message } = App.useApp();
   const isDirector = user?.role === UserRole.DIRECTOR;
   const payerMode = Form.useWatch("payerMode", form) ?? "member";
   const ceremonyId = Form.useWatch("ceremonyId", form);
+  const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
+
+  const handleAdd = async () => {
+    const values = await form.validateFields();
+    const payerName = values.payerMode === "walkIn" ? values.walkInName?.trim() : (selectedMemberName ?? "");
+    const ceremonyName = ceremonies.find((c) => c.id === values.ceremonyId)?.name;
+    const typeText = ceremonyName ? `活動捐款（${ceremonyName}）` : (donationTypeLabel[values.type as DonationType] ?? "捐款");
+    onAddPending({
+      displayLabel: `${payerName}　${typeText}${values.customItem ? `　${values.customItem}${values.quantity ? ` x${values.quantity}` : ""}` : ""}`,
+      amount: values.amount,
+      request: {
+        templeId,
+        memberId: values.payerMode === "member" ? values.memberId : undefined,
+        walkInName: values.payerMode === "walkIn" ? values.walkInName : undefined,
+        type: values.type ?? DonationType.GENERAL,
+        amount: values.amount,
+        note: values.note,
+        customItem: values.customItem,
+        quantity: values.quantity,
+        ceremonyId: values.ceremonyId || undefined,
+      },
+    });
+    form.resetFields();
+    setSelectedMemberName(undefined);
+    message.success("已加入本次捐款項目，可以繼續加入下一筆");
+  };
 
   return (
     <Card title="捐款收費">
-      <Form form={form} layout="vertical">
+      <Form form={form} name="donation" layout="vertical">
         <Form.Item label="香客類型" name="payerMode" initialValue="member">
           <Radio.Group>
             <Radio.Button value="member">已建檔信徒</Radio.Button>
@@ -157,7 +240,7 @@ function DonationFields({ form, ceremonies }: { form: any; ceremonies: CeremonyD
         </Form.Item>
         {payerMode === "member" ? (
           <Form.Item label="信徒" name="memberId" rules={[{ required: true, message: "請選擇信徒" }]}>
-            <MemberSelect />
+            <MemberSelect onSelectMember={(m) => setSelectedMemberName(m?.name)} />
           </Form.Item>
         ) : (
           <Form.Item label="姓名" name="walkInName" rules={[{ required: true, whitespace: true, message: "請輸入姓名" }]}>
@@ -204,18 +287,65 @@ function DonationFields({ form, ceremonies }: { form: any; ceremonies: CeremonyD
             </Form.Item>
           </Space.Compact>
         )}
+        <Button type="primary" ghost block onClick={handleAdd}>
+          加入本次捐款項目
+        </Button>
       </Form>
+      <PendingItemsList
+        title={`本次已加入 ${pendingItems.length} 筆捐款（尚未送出）`}
+        items={pendingItems.map((i) => ({ label: i.displayLabel, amount: i.amount }))}
+        onRemove={onRemovePending}
+      />
     </Card>
   );
 }
 
-function GiftFields({ form }: { form: any }) {
+function GiftFields({
+  form,
+  ceremonies,
+  templeId,
+  pendingItems,
+  onAddPending,
+  onRemovePending,
+}: {
+  form: any;
+  ceremonies: CeremonyDto[];
+  templeId: string;
+  pendingItems: PendingGiftItem[];
+  onAddPending: (item: PendingGiftItem) => void;
+  onRemovePending: (index: number) => void;
+}) {
+  const { message } = App.useApp();
   const payerMode = Form.useWatch("payerMode", form) ?? "member";
   const giftTypes = (Form.useWatch("giftTypes", form) ?? []) as GiftType[];
+  const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
+
+  const handleAdd = async () => {
+    const values = await form.validateFields();
+    const payerName = values.payerMode === "walkIn" ? values.walkInName?.trim() : (selectedMemberName ?? "");
+    const items = (values.giftTypes as GiftType[]).map((giftType) => ({
+      giftType,
+      quantity: values.quantities?.[giftType] || 1,
+    }));
+    const ceremonyName = ceremonies.find((c) => c.id === values.ceremonyId)?.name;
+    onAddPending({
+      displayLabel: `${payerName}　送禮：${items.map((i) => `${giftTypeLabel[i.giftType]}x${i.quantity}`).join("、")}${ceremonyName ? `（${ceremonyName}）` : ""}`,
+      request: {
+        templeId,
+        memberId: values.payerMode === "member" ? values.memberId : undefined,
+        walkInName: values.payerMode === "walkIn" ? values.walkInName : undefined,
+        items,
+        ceremonyId: values.ceremonyId || undefined,
+      },
+    });
+    form.resetFields();
+    setSelectedMemberName(undefined);
+    message.success("已加入本次送禮項目，可以繼續加入下一筆");
+  };
 
   return (
     <Card title="送禮">
-      <Form form={form} layout="vertical">
+      <Form form={form} name="gift" layout="vertical">
         <Form.Item label="捐贈者類型" name="payerMode" initialValue="member">
           <Radio.Group>
             <Radio.Button value="member">已建檔信徒</Radio.Button>
@@ -224,13 +354,24 @@ function GiftFields({ form }: { form: any }) {
         </Form.Item>
         {payerMode === "member" ? (
           <Form.Item label="信徒" name="memberId" rules={[{ required: true, message: "請選擇信徒" }]}>
-            <MemberSelect />
+            <MemberSelect onSelectMember={(m) => setSelectedMemberName(m?.name)} />
           </Form.Item>
         ) : (
           <Form.Item label="姓名" name="walkInName" rules={[{ required: true, whitespace: true, message: "請輸入姓名" }]}>
             <Input placeholder="請輸入姓名" />
           </Form.Item>
         )}
+        <Form.Item
+          label="屬於哪個活動（選填）"
+          name="ceremonyId"
+          extra="指定後，這份禮會列在該活動報表的「收禮資訊」"
+        >
+          <Select
+            allowClear
+            placeholder="不指定"
+            options={ceremonies.map((c) => ({ value: c.id, label: `${c.name}（${c.date}）` }))}
+          />
+        </Form.Item>
         <Form.Item
           label="品項（可複選）"
           name="giftTypes"
@@ -249,7 +390,15 @@ function GiftFields({ form }: { form: any }) {
             <InputNumber style={{ width: "100%" }} min={1} />
           </Form.Item>
         ))}
+        <Button type="primary" ghost block onClick={handleAdd}>
+          加入本次送禮項目
+        </Button>
       </Form>
+      <PendingItemsList
+        title={`本次已加入 ${pendingItems.length} 筆送禮（尚未送出）`}
+        items={pendingItems.map((i) => ({ label: i.displayLabel }))}
+        onRemove={onRemovePending}
+      />
     </Card>
   );
 }
@@ -961,7 +1110,7 @@ function CeremonyRegistrationFields({
 
   return (
     <Card title="活動與祭祀報名">
-      <Form form={form} layout="vertical">
+      <Form form={form} name="ceremonyRegistration" layout="vertical">
         <Form.Item label="選擇活動" name="ceremonyId" rules={[{ required: true }]}>
           <Select
             placeholder="請選擇活動"
@@ -1627,7 +1776,7 @@ function LanternFields({
 
   return (
     <Card title="點燈">
-      <Form form={form} layout="vertical">
+      <Form form={form} name="lantern" layout="vertical">
         <Form.Item label="報名者類型" name="payerMode" initialValue="member">
           <Radio.Group>
             <Radio.Button value="member">已建檔信徒</Radio.Button>
@@ -1826,6 +1975,8 @@ export function ActivityRegistrationPage() {
   const [selected, setSelected] = useState<ActivityKey[]>([]);
   const [pendingLanternItems, setPendingLanternItems] = useState<PendingLanternItem[]>([]);
   const [pendingCeremonyItems, setPendingCeremonyItems] = useState<PendingCeremonyItem[]>([]);
+  const [pendingDonationItems, setPendingDonationItems] = useState<PendingDonationItem[]>([]);
+  const [pendingGiftItems, setPendingGiftItems] = useState<PendingGiftItem[]>([]);
   const [donationForm] = Form.useForm();
   const [giftForm] = Form.useForm();
 
@@ -1835,11 +1986,10 @@ export function ActivityRegistrationPage() {
     enabled: !!templeId,
   });
 
-  const donationAmount = Form.useWatch("amount", donationForm);
   const previewTotal =
     pendingLanternItems.reduce((sum, item) => sum + item.amount, 0) +
     pendingCeremonyItems.reduce((sum, item) => sum + item.amount, 0) +
-    (selected.includes("donation") ? Number(donationAmount) || 0 : 0);
+    pendingDonationItems.reduce((sum, item) => sum + item.amount, 0);
 
   const submitMutation = useMutation({
     mutationFn: submitActivities,
@@ -1852,6 +2002,8 @@ export function ActivityRegistrationPage() {
       giftForm.resetFields();
       setPendingLanternItems([]);
       setPendingCeremonyItems([]);
+      setPendingDonationItems([]);
+      setPendingGiftItems([]);
       setSelected([]);
     },
     onError: (err: any) => {
@@ -1864,7 +2016,12 @@ export function ActivityRegistrationPage() {
   };
 
   const handleSubmit = async () => {
-    const allPendingItems = [...pendingLanternItems, ...pendingCeremonyItems];
+    const allPendingItems = [
+      ...pendingLanternItems,
+      ...pendingCeremonyItems,
+      ...pendingDonationItems,
+      ...pendingGiftItems,
+    ];
 
     if (selected.length === 0 && allPendingItems.length === 0) {
       message.warning("請先勾選要辦理的項目");
@@ -1879,13 +2036,20 @@ export function ActivityRegistrationPage() {
       return;
     }
 
-    let donationValues: any;
-    let giftValues: any;
-    try {
-      if (selected.includes("donation")) donationValues = await donationForm.validateFields();
-      if (selected.includes("gift")) giftValues = await giftForm.validateFields();
-    } catch {
-      return; // antd 已在欄位上顯示驗證錯誤
+    // 捐款與送禮可以加入多筆；沒有加入任何一筆，或表單上還有填了沒加入的內容，都要先處理
+    for (const [key, label, form, items] of [
+      ["donation", "捐款", donationForm, pendingDonationItems],
+      ["gift", "送禮", giftForm, pendingGiftItems],
+    ] as const) {
+      if (!selected.includes(key)) continue;
+      if (items.length === 0) {
+        message.warning(`請先完成${label}（點擊「加入本次${label}項目」）`);
+        return;
+      }
+      if (form.isFieldsTouched(["memberId", "walkInName", "amount", "giftTypes"])) {
+        message.warning(`${label}表單上還有填寫但沒有加入的內容，請點擊「加入本次${label}項目」，或清空後再送出`);
+        return;
+      }
     }
 
     if (!templeId) {
@@ -1894,30 +2058,8 @@ export function ActivityRegistrationPage() {
     }
 
     const payload: SubmitActivitiesRequest = {
-      donation: donationValues
-        ? {
-            templeId,
-            memberId: donationValues.payerMode === "member" ? donationValues.memberId : undefined,
-            walkInName: donationValues.payerMode === "walkIn" ? donationValues.walkInName : undefined,
-            type: donationValues.type ?? DonationType.GENERAL,
-            amount: donationValues.amount,
-            note: donationValues.note,
-            customItem: donationValues.customItem,
-            quantity: donationValues.quantity,
-            ceremonyId: donationValues.ceremonyId || undefined,
-          }
-        : undefined,
-      gift: giftValues
-        ? {
-            templeId,
-            memberId: giftValues.payerMode === "member" ? giftValues.memberId : undefined,
-            walkInName: giftValues.payerMode === "walkIn" ? giftValues.walkInName : undefined,
-            items: (giftValues.giftTypes as GiftType[]).map((giftType) => ({
-              giftType,
-              quantity: giftValues.quantities?.[giftType] || 1,
-            })),
-          }
-        : undefined,
+      donations: pendingDonationItems.length ? pendingDonationItems.map((item) => item.request) : undefined,
+      gifts: pendingGiftItems.length ? pendingGiftItems.map((item) => item.request) : undefined,
       pendingLanternClaims: pendingLanternItems.length
         ? pendingLanternItems.filter((item) => item.single).map((item) => item.single!)
         : undefined,
@@ -1962,7 +2104,14 @@ export function ActivityRegistrationPage() {
             />
           )}
           {selected.includes("donation") && (
-            <DonationFields form={donationForm} ceremonies={ceremoniesQuery.data ?? []} />
+            <DonationFields
+              form={donationForm}
+              ceremonies={ceremoniesQuery.data ?? []}
+              templeId={templeId}
+              pendingItems={pendingDonationItems}
+              onAddPending={(item) => setPendingDonationItems((prev) => [...prev, item])}
+              onRemovePending={(index) => setPendingDonationItems((prev) => prev.filter((_, i) => i !== index))}
+            />
           )}
           {selected.includes("ceremony") && (
             <>
@@ -1977,13 +2126,24 @@ export function ActivityRegistrationPage() {
               />
             </>
           )}
-          {selected.includes("gift") && <GiftFields form={giftForm} />}
+          {selected.includes("gift") && (
+            <GiftFields
+              form={giftForm}
+              ceremonies={ceremoniesQuery.data ?? []}
+              templeId={templeId}
+              pendingItems={pendingGiftItems}
+              onAddPending={(item) => setPendingGiftItems((prev) => [...prev, item])}
+              onRemovePending={(index) => setPendingGiftItems((prev) => prev.filter((_, i) => i !== index))}
+            />
+          )}
 
           {(selected.includes("donation") ||
             selected.includes("ceremony") ||
             selected.includes("gift") ||
             pendingLanternItems.length > 0 ||
-            pendingCeremonyItems.length > 0) && (
+            pendingCeremonyItems.length > 0 ||
+            pendingDonationItems.length > 0 ||
+            pendingGiftItems.length > 0) && (
             <Card>
               <Space align="center" style={{ width: "100%", justifyContent: "space-between" }}>
                 <Typography.Text strong>

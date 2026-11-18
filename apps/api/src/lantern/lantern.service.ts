@@ -3,6 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { And, In, LessThan, MoreThanOrEqual, QueryFailedError, Repository } from "typeorm";
 import {
   CeremonyDonationDto,
+  CeremonyGiftDto,
   DonationDto,
   DonationType,
   IncomeDetailDto,
@@ -337,6 +338,11 @@ export class LanternService {
   }
 
   /** 取消單筆尚未開立收據的點燈認領紀錄，供「活動報名」頁在送出並開立收據前，從加入清單中移除項目使用 */
+  /** 合併收據送出失敗時，把這次已建立、還沒開收據的捐款紀錄刪掉，避免留下沒有收據的捐款 */
+  async cancelDonation(donationId: string): Promise<void> {
+    await this.donationRepo.delete({ id: donationId });
+  }
+
   async cancelClaim(claimId: string): Promise<void> {
     const claim = await this.claimRepo.findOne({ where: { id: claimId } });
     if (!claim) throw new NotFoundException("找不到點燈紀錄");
@@ -618,6 +624,25 @@ export class LanternService {
     }));
     const total = items.reduce((sum, i) => sum + i.amount, 0);
     return { total, items };
+  }
+
+  /** 供活動報表的「收禮資訊」使用：送禮時指定屬於此活動、且收據沒有作廢的禮（含送禮人姓名） */
+  async getGiftsForCeremony(ceremonyId: string): Promise<CeremonyGiftDto[]> {
+    const gifts = await this.giftRepo.find({ where: { ceremonyId }, order: { createdAt: "ASC" } });
+    if (gifts.length === 0) return [];
+    const voidedIds = await this.getVoidedSourceIds(
+      ReceiptSourceType.GIFT,
+      gifts.map((g) => g.id),
+    );
+    const active = gifts.filter((g) => !voidedIds.has(g.id));
+    const memberIds = active.map((g) => g.memberId).filter((id): id is string => !!id);
+    const memberById = await this.householdService.findMembersByIds([...new Set(memberIds)]);
+    return active.map((g) => ({
+      giverName: g.memberId ? (memberById.get(g.memberId)?.name ?? "") : (g.walkInName ?? ""),
+      giftType: g.giftType,
+      quantity: g.quantity,
+      createdAt: g.createdAt.toISOString(),
+    }));
   }
 
   /** 供「審核日誌」日曆使用：查詢期間內（依台灣本地時間分天）哪些日期有已開立收據的收入（點燈/捐款/法會報名/送禮） */

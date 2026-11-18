@@ -70,6 +70,7 @@ describe("CeremonyService（白箱）", () => {
       getVoidedSourceIds: jest.fn().mockResolvedValue(new Set()),
       getReceiptIdsBySource: jest.fn().mockResolvedValue(new Map()),
       getCeremonyDonationSummary: jest.fn().mockResolvedValue({ total: 0, items: [] }),
+      getGiftsForCeremony: jest.fn().mockResolvedValue([]),
     };
     service = new CeremonyService(
       ceremonyRepo as never,
@@ -1115,7 +1116,7 @@ describe("CeremonyService（白箱）", () => {
       expect(registrationRepo.remove).toHaveBeenCalledWith({ id: "reg1" });
     });
 
-    it("報表：排除已作廢的報名，加總金額、座位數、活動捐款與已核准支出", async () => {
+    it("報表：排除已作廢的報名，加總金額、座位數、活動捐款、已核准支出與此活動的收禮", async () => {
       await expect(service.getCeremonyReport("x")).rejects.toThrow(NotFoundException);
 
       ceremonyRepo.findOne.mockResolvedValue(general());
@@ -1132,8 +1133,12 @@ describe("CeremonyService（白箱）", () => {
         { category: "供品", amount: "800.00", description: null, occurredAt: "2026-03-01" },
         { category: "場地", amount: "200.00", description: "租金", occurredAt: "2026-03-02" },
       ]);
+      const gift = { giverName: "林老闆", giftType: "FLOWERS", quantity: 2, createdAt: "2026-03-01T00:00:00.000Z" };
+      lanternService.getGiftsForCeremony.mockResolvedValue([gift]);
 
       const report = await service.getCeremonyReport("c1");
+      expect(lanternService.getGiftsForCeremony).toHaveBeenCalledWith("c1");
+      expect(report.gifts).toEqual([gift]);
       expect(report).toMatchObject({ totalAmount: 800, registrationCount: 2, donationTotal: 5000, expenseTotal: 1000 });
       expect(report.ceremony).toMatchObject({ registrationCount: 2, totalAmount: 800, seatsAssigned: 1 });
       expect(report.registrations.map((r) => [r.participantName, r.receiptId])).toEqual([

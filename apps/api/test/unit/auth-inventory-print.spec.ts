@@ -453,6 +453,41 @@ describe("GiftService / SettingsService（白箱）", () => {
     expect(giftRepo.save).toHaveBeenCalledTimes(3);
   });
 
+  it("送禮指定活動：活動存在才建立，每個品項都記上活動；活動不存在 404 不建立；沒指定時是 null", async () => {
+    const giftRepo = mockRepo();
+    const household = { findMemberById: jest.fn(), findMemberByIdOrNull: jest.fn() };
+    const service = new GiftService(giftRepo as never, household as never);
+    const items = [
+      { giftType: GiftType.FLOWERS, quantity: 2 },
+      { giftType: GiftType.WATER, quantity: 1 },
+    ];
+
+    giftRepo.manager.findOne.mockResolvedValueOnce({ id: "c1" });
+    const withCeremony = await service.createGiftForCombined({ templeId: "t1", walkInName: "甲", items, ceremonyId: "c1" }, "u1");
+    expect(withCeremony.gifts.map((g) => g.ceremonyId)).toEqual(["c1", "c1"]);
+
+    giftRepo.manager.findOne.mockResolvedValueOnce(null);
+    giftRepo.save.mockClear();
+    await expect(
+      service.createGiftForCombined({ templeId: "t1", walkInName: "甲", items, ceremonyId: "ghost" }, "u1"),
+    ).rejects.toThrow(new NotFoundException("找不到活動"));
+    expect(giftRepo.save).not.toHaveBeenCalled();
+
+    giftRepo.manager.findOne.mockClear();
+    const plain = await service.createGiftForCombined({ templeId: "t1", walkInName: "甲", items }, "u1");
+    expect(plain.gifts.every((g) => g.ceremonyId === null)).toBe(true);
+    expect(giftRepo.manager.findOne).not.toHaveBeenCalled();
+  });
+
+  it("取消送禮：一次刪掉多筆；沒有要刪的就不動資料庫", async () => {
+    const giftRepo = mockRepo();
+    const service = new GiftService(giftRepo as never, {} as never);
+    await service.cancelGifts([]);
+    expect(giftRepo.delete).not.toHaveBeenCalled();
+    await service.cancelGifts(["g1", "g2"]);
+    expect(giftRepo.delete).toHaveBeenCalledWith(["g1", "g2"]);
+  });
+
   it("設定：找不到廟宇 404；印信依種類寫到不同欄位", async () => {
     const templeRepo = mockRepo();
     const service = new SettingsService(templeRepo as never);

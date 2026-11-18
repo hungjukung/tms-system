@@ -38,6 +38,16 @@ export function exportRowsToExcel(
   XLSX.writeFile(workbook, filename);
 }
 
+/** 一個 Excel 檔多個工作表（工作表名稱最長 31 字、不可含特殊符號，超過會被 Excel 拒絕，這裡先截短） */
+export function exportSheetsToExcel(filename: string, sheets: { name: string; rows: (string | number)[][] }[]) {
+  const workbook = XLSX.utils.book_new();
+  for (const sheet of sheets) {
+    const safeName = sheet.name.replace(/[\/?*[\]:]/g, "").slice(0, 31) || "Sheet";
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(sheet.rows), safeName);
+  }
+  XLSX.writeFile(workbook, filename);
+}
+
 export async function exportRowsToWord(
   filename: string,
   title: string,

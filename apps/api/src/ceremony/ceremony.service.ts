@@ -1159,6 +1159,7 @@ export class CeremonyService {
     const expenseTotal = expenses.reduce((sum, e) => sum + e.amount, 0);
 
     const seatsAssigned = registrations.filter((r) => r.seatIndex != null).length;
+    const gifts = await this.lanternService.getGiftsForCeremony(ceremonyId);
     const roomsBooked = (await this.getRoomsBookedByCeremony([ceremonyId])).get(ceremonyId);
     const busLoads = (await this.getBusLoadsByCeremony([ceremonyId])).get(ceremonyId);
 
@@ -1177,6 +1178,7 @@ export class CeremonyService {
       donations,
       expenseTotal,
       expenses,
+      gifts,
     };
   }
 

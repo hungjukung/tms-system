@@ -1,4 +1,7 @@
 import { expect, Page, test } from "@playwright/test";
+import * as fs from "fs";
+// 讀匯出的 Excel 驗證內容：xlsx 裝在前端專案底下
+import * as XLSX from "../apps/web/node_modules/xlsx";
 import { apiAs, futureDate, loginWithTemple, radioButton, selectOption } from "./helpers";
 
 /**
@@ -270,6 +273,113 @@ test.describe("活動建立與報名", () => {
       ["丙", 1],
       ["丁", 1],
     ]);
+  });
+
+  test("一次加入兩筆捐款與兩筆送禮（一份禮指定進香活動）→ 一張收據 → 活動詳情匯出進香總表", async ({ page, request }) => {
+    const api = await apiAs(request, "director");
+    const name = `進香收禮-${Date.now()}`;
+    const ceremony = await api.post("/ceremony/ceremonies", {
+      templeId: await api.templeId(),
+      name,
+      date: futureDate(),
+      feeMode: "FREE_WILL",
+      kind: "PILGRIMAGE",
+      busCount: 1,
+      roomTypes: [{ name: "雙人房", capacity: 2, fee: 3000, roomCount: 5 }],
+    });
+    await api.post("/activities/submit", {
+      pendingCeremonyRegistrations: [
+        {
+          ceremonyId: ceremony.id,
+          walkInName: "阿土伯",
+          roomType: "雙人房",
+          amount: 6000,
+          passengerMemberIds: ["", ""],
+          passengerNames: ["", "阿土嫂"],
+        },
+      ],
+    });
+
+    await loginWithTemple(page, "director");
+    await page.locator(".ant-menu").getByText("活動報名", { exact: true }).click();
+    await page.locator(".ant-checkbox-wrapper", { hasText: "捐款收費" }).click();
+    await page.locator(".ant-checkbox-wrapper", { hasText: "送禮" }).click();
+    const card = (title: string) =>
+      page.locator(".ant-card").filter({ has: page.locator(".ant-card-head-title", { hasText: new RegExp(`^${title}$`) }) });
+    const donationCard = card("捐款收費");
+    const giftCard = card("送禮");
+
+    // 捐款兩筆：一般捐款、指定給進香活動
+    await radioButton(donationCard, "臨櫃香客（免建檔）").click();
+    await donationCard.getByLabel("姓名", { exact: true }).fill("王小明");
+    await donationCard.getByRole("spinbutton", { name: "金額" }).fill("500");
+    await donationCard.getByRole("button", { name: "加入本次捐款項目" }).click();
+    await radioButton(donationCard, "臨櫃香客（免建檔）").click();
+    await donationCard.getByLabel("姓名", { exact: true }).fill("林老闆");
+    await selectOption(page, "指定活動（選填）", name);
+    await donationCard.getByRole("spinbutton", { name: "金額" }).fill("300");
+    await donationCard.getByRole("button", { name: "加入本次捐款項目" }).click();
+    await expect(donationCard.getByText("本次已加入 2 筆捐款（尚未送出）")).toBeVisible();
+    await expect(donationCard.getByText(`林老闆　活動捐款（${name}）　NT$ 300`)).toBeVisible();
+
+    // 送禮兩筆：一份指定進香活動、一份不指定
+    await radioButton(giftCard, "臨櫃（免建檔）").click();
+    await giftCard.getByLabel("姓名", { exact: true }).fill("陳太太");
+    await selectOption(page, "屬於哪個活動（選填）", name);
+    await selectOption(page, "品項（可複選）", "鮮花");
+    await page.keyboard.press("Escape");
+    await giftCard.getByLabel("鮮花 數量").fill("2");
+    await giftCard.getByRole("button", { name: "加入本次送禮項目" }).click();
+    await radioButton(giftCard, "臨櫃（免建檔）").click();
+    await giftCard.getByLabel("姓名", { exact: true }).fill("張先生");
+    await selectOption(page, "品項（可複選）", "水");
+    await page.keyboard.press("Escape");
+    await giftCard.getByRole("button", { name: "加入本次送禮項目" }).click();
+    await expect(giftCard.getByText("本次已加入 2 筆送禮（尚未送出）")).toBeVisible();
+    await expect(giftCard.getByText(`陳太太　送禮：鮮花x2（${name}）`)).toBeVisible();
+
+    await expect(page.getByText("NT$ 800")).toBeVisible();
+
+    const popupPromise = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "送出並開立收據" }).click();
+    const receipt = await popupPromise;
+    await expect(page.getByText("已開立收據")).toBeVisible();
+    await expect(receipt.locator("body")).toContainText("NT$ 800");
+    await expect(receipt.locator("body")).toContainText("品項：鮮花x2");
+    await expect(receipt.locator("body")).toContainText("品項：水x1");
+
+    // 活動報表：只有指定給這個活動的禮與捐款
+    const report = await api.get(`/ceremony/ceremonies/${ceremony.id}/report`);
+    expect(report.gifts.map((g: { giverName: string; quantity: number }) => [g.giverName, g.quantity])).toEqual([["陳太太", 2]]);
+    expect(report.donationTotal).toBe(300);
+
+    // 活動詳情 → 匯出進香總表：四個工作表，內容對得上
+    await page.locator(".ant-menu").getByText("建立活動", { exact: true }).click();
+    await radioButton(page, /^進香$/).click();
+    await page.locator(".ant-table-row", { hasText: name }).getByText(name, { exact: true }).click();
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: /匯出進香總表 Excel/ }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe(`進香總表_${name}.xlsx`);
+
+    const workbook = XLSX.read(fs.readFileSync(await download.path()), { type: "buffer" });
+    expect(workbook.SheetNames).toEqual(["房型名單", "車次名單", "收入支出總表", "收禮資訊"]);
+    const rowsOf = (sheet: string) =>
+      XLSX.utils.sheet_to_json<(string | number)[]>(workbook.Sheets[sheet], { header: 1, blankrows: true });
+    expect(rowsOf("房型名單").slice(0, 2)).toEqual([
+      ["雙人房", "參加者", "參加者", "金額", "報名時間"],
+      [1, "阿土伯", "阿土嫂", 6000, expect.any(String)],
+    ]);
+    expect(rowsOf("車次名單")[0]).toEqual(["第1車", "參加者", "房型", "第幾間", "報名時間"]);
+    expect(rowsOf("收入支出總表")).toEqual([
+      ["類別", "項目", "收入", "支出"],
+      ["報名費", "雙人房（1 間、2 人）", 6000, ""],
+      ["活動捐款", "共 1 筆", 300, ""],
+      [],
+      ["合計", "", 6300, 0],
+      ["結餘", "收入 − 支出", 6300, ""],
+    ]);
+    expect(rowsOf("收禮資訊")).toContainEqual(["陳太太", "鮮花", 2, expect.any(String)]);
   });
 
   test("唯讀帳號可以瀏覽頁面，但送出報名會被擋下", async ({ page, request }) => {

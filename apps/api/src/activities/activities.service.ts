@@ -25,20 +25,22 @@ export class ActivitiesService {
    * 「活動報名」頁一次勾選多個活動（點燈／捐款收費／活動報名／送禮）時，各活動仍各自建立紀錄，
    * 但合併開立成單一張收據、金額加總。點燈／法會報名在此之前只暫存在前端（「加入」不會馬上寫入資料庫），
    * 送出當下才真正卡位／配位並建立紀錄，緊接著開立收據——避免「加入後忘記送出」留下沒有收據、卻佔用
-   * 座位/燈位的孤兒資料。若任何一步失敗（例如燈位/座位被搶先選走），會把這次送出過程中已經建立的
-   * 點燈/報名紀錄清乾淨再回報錯誤，不會留下部分成功的殘留資料。
+   * 座位/燈位的孤兒資料。若任何一步失敗（例如燈位/座位被搶先選走、送禮指定的活動不存在），會把這次送出過程中
+   * 已經建立的點燈/報名/捐款/送禮紀錄清乾淨再回報錯誤，不會留下部分成功的殘留資料。
    */
   async submit(dto: SubmitActivitiesDto, userId: string, userRole: UserRole): Promise<SubmitActivitiesResponse> {
     const items: ReceiptItemDto[] = [];
     let payerName = "";
     let templeId = "";
-    let donation: DonationDto | undefined;
-    let gifts: GiftDto[] | undefined;
+    const donations: DonationDto[] = [];
+    const gifts: GiftDto[] = [];
     let ceremonyRegistration: CeremonyRegistrationDto | undefined;
     let ceremonyRegistrations: CeremonyRegistrationDto[] | undefined;
 
     const createdClaimIds: string[] = [];
     const createdRegistrationIds: string[] = [];
+    const createdDonationIds: string[] = [];
+    const createdGiftIds: string[] = [];
     // 記錄每個點燈項目的點燈人，多人點燈時在備註前面加上名字，讓人看得出誰點了哪一盞
     const lanternItems: { item: ReceiptItemDto; payer: string }[] = [];
 
@@ -96,27 +98,30 @@ export class ActivitiesService {
         }
       }
 
-      if (dto.donation) {
-        const result = await this.lanternService.createDonationForCombined(dto.donation, userId, userRole);
-        donation = result.donation;
+      // 捐款與送禮可以一次開立多筆：每一筆各自是收據上的一個項目（單筆舊欄位 donation／gift 排在最前面）
+      for (const donationDto of [...(dto.donation ? [dto.donation] : []), ...(dto.donations ?? [])]) {
+        const result = await this.lanternService.createDonationForCombined(donationDto, userId, userRole);
+        createdDonationIds.push(result.donation.id);
+        donations.push(result.donation);
         items.push({
           description: result.description,
-          amount: dto.donation.amount,
+          amount: donationDto.amount,
           note: result.note,
-          sourceRefs: [{ sourceType: ReceiptSourceType.DONATION, sourceId: donation.id }],
+          sourceRefs: [{ sourceType: ReceiptSourceType.DONATION, sourceId: result.donation.id }],
         });
         payerName = payerName || result.payerName;
-        templeId = templeId || dto.donation.templeId;
+        templeId = templeId || donationDto.templeId;
       }
 
-      if (dto.gift) {
-        const result = await this.giftService.createGiftForCombined(dto.gift, userId);
-        gifts = result.gifts;
+      for (const giftDto of [...(dto.gift ? [dto.gift] : []), ...(dto.gifts ?? [])]) {
+        const result = await this.giftService.createGiftForCombined(giftDto, userId);
+        createdGiftIds.push(...result.gifts.map((g) => g.id));
+        gifts.push(...result.gifts);
         items.push({
           description: result.description,
           amount: 0,
           note: result.note,
-          sourceRefs: gifts.map((g) => ({ sourceType: ReceiptSourceType.GIFT, sourceId: g.id })),
+          sourceRefs: result.gifts.map((g) => ({ sourceType: ReceiptSourceType.GIFT, sourceId: g.id })),
         });
         payerName = payerName || result.payerName;
         templeId = templeId || result.templeId;
@@ -139,11 +144,20 @@ export class ActivitiesService {
       }
 
       const receipt = await this.lanternService.issueCombinedReceipt(items, payerName, userId, templeId);
-      return { receipt, donation, gifts, ceremonyRegistration, ceremonyRegistrations };
+      return {
+        receipt,
+        donation: donations[0],
+        donations: donations.length ? donations : undefined,
+        gifts: gifts.length ? gifts : undefined,
+        ceremonyRegistration,
+        ceremonyRegistrations,
+      };
     } catch (err) {
       await Promise.all([
         ...createdClaimIds.map((id) => this.lanternService.cancelClaim(id).catch(() => undefined)),
         ...createdRegistrationIds.map((id) => this.ceremonyService.cancelRegistration(id).catch(() => undefined)),
+        ...createdDonationIds.map((id) => this.lanternService.cancelDonation(id).catch(() => undefined)),
+        this.giftService.cancelGifts(createdGiftIds).catch(() => undefined),
       ]);
       throw err;
     }

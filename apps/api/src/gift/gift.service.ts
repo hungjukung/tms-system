@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { GiftDto, GiftType } from "@tms/shared";
 import { HouseholdService } from "../household/household.service";
+import { Ceremony } from "../ceremony/entities/ceremony.entity";
 import { Gift } from "./entities/gift.entity";
 import { CreateGiftDto } from "./dto/create-gift.dto";
 
@@ -36,6 +37,10 @@ export class GiftService {
     if (dto.memberId) {
       await this.householdService.findMemberById(dto.memberId);
     }
+    if (dto.ceremonyId) {
+      const ceremony = await this.giftRepo.manager.findOne(Ceremony, { where: { id: dto.ceremonyId } });
+      if (!ceremony) throw new NotFoundException("找不到活動");
+    }
     const gifts = this.giftRepo.create(
       dto.items.map((item) => ({
         templeId: dto.templeId,
@@ -43,6 +48,7 @@ export class GiftService {
         walkInName: dto.walkInName ?? null,
         giftType: item.giftType,
         quantity: item.quantity,
+        ceremonyId: dto.ceremonyId ?? null,
         createdByUserId: userId,
       })),
     );
@@ -63,6 +69,12 @@ export class GiftService {
     };
   }
 
+  /** 合併收據送出失敗時，把這次已建立、還沒開收據的送禮紀錄刪掉 */
+  async cancelGifts(giftIds: string[]): Promise<void> {
+    if (giftIds.length === 0) return;
+    await this.giftRepo.delete(giftIds);
+  }
+
   private toGiftDto(gift: Gift): GiftDto {
     return {
       id: gift.id,
@@ -71,6 +83,7 @@ export class GiftService {
       walkInName: gift.walkInName,
       giftType: gift.giftType,
       quantity: gift.quantity,
+      ceremonyId: gift.ceremonyId ?? null,
       createdAt: gift.createdAt.toISOString(),
     };
   }

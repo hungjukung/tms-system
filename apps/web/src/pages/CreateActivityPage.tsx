@@ -60,7 +60,8 @@ import { openPrintWindow } from "../api/client";
 import { MemberSelect } from "../components/MemberSelect";
 import { useAuth } from "../context/AuthContext";
 import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
-import { exportRowsToExcel } from "../utils/export";
+import { exportRowsToExcel, exportSheetsToExcel } from "../utils/export";
+import { buildPilgrimageWorkbook } from "../utils/pilgrimageReport";
 import { joinLanternType, splitLanternType } from "../utils/lanternType";
 
 type ActivityType = "ceremony" | "jigai" | "pilgrimage" | "lanternWall";
@@ -687,6 +688,11 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
     );
   };
 
+  const handleExportPilgrimageWorkbook = () => {
+    if (!reportQuery.data) return;
+    exportSheetsToExcel(`進香總表_${ceremony.name}.xlsx`, buildPilgrimageWorkbook(reportQuery.data));
+  };
+
   const handleExportRoster = () => {
     exportRowsToExcel(
       `名單_${ceremony.name}.xlsx`,
@@ -783,6 +789,12 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
           <Statistic title="活動本身的捐款" value={donationTotal} prefix="NT$" valueStyle={{ color: "#a8071a" }} />
           <Statistic title="列入活動計算的支出" value={expenseTotal} prefix="NT$" valueStyle={{ color: "#1a5c26" }} />
         </Space>
+
+        {isPilgrimage && (
+          <Button type="primary" onClick={handleExportPilgrimageWorkbook} disabled={!reportQuery.data}>
+            匯出進香總表 Excel（房型名單、車次名單、收入支出總表、收禮資訊）
+          </Button>
+        )}
 
         {ceremony.totalSeats != null && (
           <Card

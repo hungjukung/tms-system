@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException } from "@nestjs/common";
+import { BadRequestException, ConflictException, NotFoundException } from "@nestjs/common";
 import { ReceiptSourceType, UserRole } from "@tms/shared";
 import { ActivitiesService } from "../../src/activities/activities.service";
 
@@ -28,12 +28,13 @@ describe("ActivitiesService.submit（白箱）", () => {
       createDonationForCombined: jest.fn(),
       issueCombinedReceipt: jest.fn(async (items, payerName, _userId, templeId) => ({ id: "r1", items, payerName, templeId })),
       cancelClaim: jest.fn().mockResolvedValue(undefined),
+      cancelDonation: jest.fn().mockResolvedValue(undefined),
     };
     ceremony = {
       createRegistrationForCombined: jest.fn(),
       cancelRegistration: jest.fn().mockResolvedValue(undefined),
     };
-    gift = { createGiftForCombined: jest.fn() };
+    gift = { createGiftForCombined: jest.fn(), cancelGifts: jest.fn().mockResolvedValue(undefined) };
     service = new ActivitiesService(lantern as never, ceremony as never, gift as never);
   });
 
@@ -178,6 +179,85 @@ describe("ActivitiesService.submit（白箱）", () => {
       lantern.createDonationForCombined.mockResolvedValue({ donation: { id: "d1" }, payerName: "甲", description: "一般捐款" });
       await service.submit({ donation: { templeId: "t1", amount: 1 } } as never, "u1", UserRole.DIRECTOR);
       expect(lantern.createDonationForCombined).toHaveBeenCalledWith({ templeId: "t1", amount: 1 }, "u1", UserRole.DIRECTOR);
+    });
+  });
+
+  describe("多筆捐款與送禮", () => {
+    const donationResult = (id: string, payerName: string, description = "一般捐款") => ({
+      donation: { id, amount: 1 },
+      payerName,
+      description,
+    });
+    const giftResult = (ids: string[], payerName: string, note: string) => ({
+      gifts: ids.map((id) => ({ id })),
+      payerName,
+      description: "送禮",
+      note,
+      templeId: "t1",
+    });
+
+    it("單筆舊欄位排在前面、多筆依序；每一筆各是一個收據項目；回傳全部捐款與攤平的送禮紀錄", async () => {
+      lantern.createDonationForCombined
+        .mockResolvedValueOnce(donationResult("d0", "甲"))
+        .mockResolvedValueOnce(donationResult("d1", "乙"))
+        .mockResolvedValueOnce(donationResult("d2", "丙", "進香 捐款"));
+      gift.createGiftForCombined
+        .mockResolvedValueOnce(giftResult(["g0"], "甲", "品項：水x1"))
+        .mockResolvedValueOnce(giftResult(["g1", "g2"], "丁", "品項：鮮花x1、啤酒x2"));
+
+      const result = await submit({
+        donation: { templeId: "t1", amount: 100 },
+        donations: [
+          { templeId: "t1", amount: 200 },
+          { templeId: "t1", amount: 300 },
+        ],
+        gift: {},
+        gifts: [{}],
+      });
+
+      expect(issuedItems().map((i) => [i.description, i.amount, i.note ?? null])).toEqual([
+        ["一般捐款", 100, null],
+        ["一般捐款", 200, null],
+        ["進香 捐款", 300, null],
+        ["送禮", 0, "品項：水x1"],
+        ["送禮", 0, "品項：鮮花x1、啤酒x2"],
+      ]);
+      expect(result.donation).toEqual({ id: "d0", amount: 1 });
+      expect(result.donations?.map((d) => d.id)).toEqual(["d0", "d1", "d2"]);
+      expect(result.gifts?.map((g) => g.id)).toEqual(["g0", "g1", "g2"]);
+      expect(lantern.issueCombinedReceipt.mock.calls[0][1]).toBe("甲");
+    });
+
+    it("沒有捐款、沒有送禮時，回傳裡不帶這兩個欄位", async () => {
+      ceremony.createRegistrationForCombined.mockResolvedValue({ registration: { id: "reg1" }, payerName: "甲", description: "法會", templeId: "t1" });
+      const result = await submit({ pendingCeremonyRegistrations: [{ amount: 1 }] });
+      expect(result.donation).toBeUndefined();
+      expect(result.donations).toBeUndefined();
+      expect(result.gifts).toBeUndefined();
+    });
+
+    it("後面的送禮失敗：前面已建立的捐款與送禮全部刪掉，不開收據", async () => {
+      lantern.createDonationForCombined
+        .mockResolvedValueOnce(donationResult("d1", "甲"))
+        .mockResolvedValueOnce(donationResult("d2", "甲"));
+      gift.createGiftForCombined
+        .mockResolvedValueOnce(giftResult(["g1", "g2"], "甲", "x"))
+        .mockRejectedValueOnce(new NotFoundException("找不到活動"));
+
+      await expect(submit({ donations: [{ templeId: "t1", amount: 1 }, { templeId: "t1", amount: 1 }], gifts: [{}, {}] })).rejects.toThrow(
+        "找不到活動",
+      );
+      expect(lantern.cancelDonation.mock.calls.map(([id]) => id)).toEqual(["d1", "d2"]);
+      expect(gift.cancelGifts).toHaveBeenCalledWith(["g1", "g2"]);
+      expect(lantern.issueCombinedReceipt).not.toHaveBeenCalled();
+    });
+
+    it("刪除捐款或送禮本身失敗，不會蓋掉原本的錯誤訊息", async () => {
+      lantern.createDonationForCombined.mockResolvedValueOnce(donationResult("d1", "甲"));
+      gift.createGiftForCombined.mockRejectedValueOnce(new NotFoundException("找不到活動"));
+      lantern.cancelDonation.mockRejectedValue(new Error("資料庫斷線"));
+      gift.cancelGifts.mockRejectedValue(new Error("資料庫斷線"));
+      await expect(submit({ donations: [{ templeId: "t1", amount: 1 }], gifts: [{}] })).rejects.toThrow("找不到活動");
     });
   });
 

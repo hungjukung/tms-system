@@ -292,6 +292,127 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
       expect(res.body.gifts).toHaveLength(1);
     });
 
+    describe("一次開立多筆捐款與送禮；送禮指定活動", () => {
+      const createCeremony = async (name = "進香") =>
+        (
+          await director
+            .post("/ceremony/ceremonies", { templeId: fx.templeId, name, date: "2099-01-01", feeMode: CeremonyFeeMode.FREE_WILL })
+            .expect(201)
+        ).body;
+      const ceremonyReport = async (id: string) => (await volunteer.get(`/ceremony/ceremonies/${id}/report`).expect(200)).body;
+
+      it("多筆捐款與多筆送禮合併成一張收據，每一筆各是一個項目；指定活動的禮列在該活動報表", async () => {
+        const ceremony = await createCeremony();
+        const other = await createCeremony("餐會");
+        const member = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "王小明");
+
+        const res = await volunteer
+          .post("/activities/submit", {
+            donations: [
+              { templeId: fx.templeId, memberId: member.id, type: DonationType.GENERAL, amount: 500 },
+              { templeId: fx.templeId, walkInName: "林老闆", type: DonationType.GENERAL, amount: 300, ceremonyId: ceremony.id },
+            ],
+            gifts: [
+              { templeId: fx.templeId, walkInName: "陳太太", items: [{ giftType: GiftType.FLOWERS, quantity: 2 }], ceremonyId: ceremony.id },
+              { templeId: fx.templeId, memberId: member.id, items: [{ giftType: GiftType.WATER, quantity: 3 }, { giftType: GiftType.BEER, quantity: 1 }] },
+              { templeId: fx.templeId, walkInName: "張先生", items: [{ giftType: GiftType.DRINKS, quantity: 5 }], ceremonyId: other.id },
+            ],
+          })
+          .expect(201);
+
+        expect(res.body.receipt).toMatchObject({ amount: 800, payerName: "王小明" });
+        expect(res.body.receipt.items.map((i: { description: string; amount: number; note?: string }) => [i.description, i.amount, i.note ?? null])).toEqual([
+          ["一般捐款", 500, null],
+          ["進香 捐款", 300, null],
+          ["送禮", 0, "品項：鮮花x2"],
+          ["送禮", 0, "品項：水x3、啤酒x1"],
+          ["送禮", 0, "品項：飲料x5"],
+        ]);
+        expect(res.body.donation).toMatchObject({ amount: 500 });
+        expect(res.body.donations).toHaveLength(2);
+        expect(res.body.gifts.map((g: { giftType: string; ceremonyId: string | null }) => [g.giftType, g.ceremonyId])).toEqual([
+          [GiftType.FLOWERS, ceremony.id],
+          [GiftType.WATER, null],
+          [GiftType.BEER, null],
+          [GiftType.DRINKS, other.id],
+        ]);
+
+        // 活動報表只列指定給這個活動的禮與捐款
+        const report = await ceremonyReport(ceremony.id);
+        expect(report.gifts).toEqual([
+          expect.objectContaining({ giverName: "陳太太", giftType: GiftType.FLOWERS, quantity: 2 }),
+        ]);
+        expect(report.donationTotal).toBe(300);
+        expect((await ceremonyReport(other.id)).gifts.map((g: { giverName: string }) => g.giverName)).toEqual(["張先生"]);
+      });
+
+      it("單筆舊欄位（donation／gift）與多筆欄位可以並用，單筆排在前面", async () => {
+        const res = await volunteer
+          .post("/activities/submit", {
+            donation: { templeId: fx.templeId, walkInName: "甲", type: DonationType.GENERAL, amount: 100 },
+            donations: [{ templeId: fx.templeId, walkInName: "乙", type: DonationType.GENERAL, amount: 200 }],
+            gift: { templeId: fx.templeId, walkInName: "甲", items: [{ giftType: GiftType.WATER, quantity: 1 }] },
+            gifts: [{ templeId: fx.templeId, walkInName: "乙", items: [{ giftType: GiftType.BEER, quantity: 2 }] }],
+          })
+          .expect(201);
+        expect(res.body.receipt.amount).toBe(300);
+        expect(res.body.receipt.items.map((i: { amount: number; note?: string }) => [i.amount, i.note ?? null])).toEqual([
+          [100, null],
+          [200, null],
+          [0, "品項：水x1"],
+          [0, "品項：啤酒x2"],
+        ]);
+      });
+
+      it("送禮指定的活動不存在：404，這次已建立的捐款、送禮全部取消，不開收據", async () => {
+        const ceremony = await createCeremony();
+        const member = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "王小明");
+
+        const res = await volunteer
+          .post("/activities/submit", {
+            donations: [{ templeId: fx.templeId, memberId: member.id, type: DonationType.GENERAL, amount: 500 }],
+            gifts: [
+              { templeId: fx.templeId, walkInName: "陳太太", items: [{ giftType: GiftType.FLOWERS, quantity: 1 }], ceremonyId: ceremony.id },
+              { templeId: fx.templeId, walkInName: "陳太太", items: [{ giftType: GiftType.WATER, quantity: 1 }], ceremonyId: GHOST_ID },
+            ],
+          })
+          .expect(404);
+        expect(res.body.message).toBe("找不到活動");
+
+        expect((await volunteer.get("/lantern/receipts").expect(200)).body.total).toBe(0);
+        expect((await volunteer.get(`/lantern/members/${member.id}/history`).expect(200)).body).toEqual([]);
+        expect((await ceremonyReport(ceremony.id)).gifts).toEqual([]);
+      });
+
+      it("送禮的活動 id 格式錯誤、多筆裡任一筆數量 0：400", async () => {
+        const gift = (overrides: Record<string, unknown>) => ({
+          templeId: fx.templeId,
+          walkInName: "甲",
+          items: [{ giftType: GiftType.WATER, quantity: 1 }],
+          ...overrides,
+        });
+        await volunteer.post("/activities/submit", { gifts: [gift({ ceremonyId: "not-a-uuid" })] }).expect(400);
+        await volunteer
+          .post("/activities/submit", { gifts: [gift({}), gift({ items: [{ giftType: GiftType.WATER, quantity: 0 }] })] })
+          .expect(400);
+        await volunteer
+          .post("/activities/submit", { donations: [{ templeId: fx.templeId, walkInName: "甲", type: DonationType.GENERAL, amount: -1 }] })
+          .expect(400);
+      });
+
+      it("作廢收據後，那份禮就不再列在活動的收禮資訊", async () => {
+        const ceremony = await createCeremony();
+        const res = await volunteer
+          .post("/activities/submit", {
+            gifts: [{ templeId: fx.templeId, walkInName: "陳太太", items: [{ giftType: GiftType.FLOWERS, quantity: 1 }], ceremonyId: ceremony.id }],
+          })
+          .expect(201);
+        expect((await ceremonyReport(ceremony.id)).gifts).toHaveLength(1);
+        await finance.post(`/lantern/receipts/${res.body.receipt.id}/void`, { reason: "登記錯誤" }).expect(201);
+        expect((await ceremonyReport(ceremony.id)).gifts).toEqual([]);
+      });
+    });
+
     it("完全沒有項目：400", async () => {
       const res = await volunteer.post("/activities/submit", {}).expect(400);
       expect(res.body.message).toBe("尚未填寫任何活動項目");

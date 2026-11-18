@@ -307,6 +307,8 @@ export interface CreateGiftRequest {
   walkInName?: string;
   /** 可一次選擇多個品項並各自填寫數量，各自建立一筆送禮紀錄，收據上合併成單一「送禮」項目 */
   items: GiftItemRequest[];
+  /** 送禮屬於哪個活動（選填）：活動報表的「收禮資訊」會列出 */
+  ceremonyId?: string;
 }
 
 export interface GiftDto {
@@ -316,6 +318,8 @@ export interface GiftDto {
   walkInName: string | null;
   giftType: GiftType;
   quantity: number;
+  /** 屬於哪個活動；沒指定時為 null */
+  ceremonyId: string | null;
   createdAt: string;
 }
 
@@ -483,6 +487,15 @@ export interface CeremonyReportDto {
   /** 列入活動計算的手動流水帳支出：額外統計進此活動，本身仍照常計入財務報表總支出（不排除） */
   expenseTotal: number;
   expenses: CeremonyExpenseDto[];
+  /** 收禮資訊：送禮時指定屬於這個活動的禮（已作廢的不算） */
+  gifts: CeremonyGiftDto[];
+}
+
+export interface CeremonyGiftDto {
+  giverName: string;
+  giftType: GiftType;
+  quantity: number;
+  createdAt: string;
 }
 
 export interface CeremonyDonationDto {
@@ -660,6 +673,10 @@ export interface CeremonySeatDto {
 export interface SubmitActivitiesRequest {
   donation?: CreateDonationRequest;
   gift?: CreateGiftRequest;
+  /** 同一張收據一次開立多筆捐款（各自一個收據項目）；可與 donation 並用 */
+  donations?: CreateDonationRequest[];
+  /** 同一張收據一次開立多筆送禮（各自一個收據項目）；可與 gift 並用 */
+  gifts?: CreateGiftRequest[];
   /** 尚未建立紀錄的點燈認領（單人） */
   pendingLanternClaims?: ClaimLanternSlotRequest[];
   /** 尚未建立紀錄的整戶點燈 */
@@ -674,7 +691,10 @@ export interface SubmitActivitiesRequest {
 
 export interface SubmitActivitiesResponse {
   receipt: ReceiptDto;
+  /** 第一筆捐款（相容舊版）；全部捐款見 donations */
   donation?: DonationDto;
+  donations?: DonationDto[];
+  /** 全部送禮紀錄（多筆送禮的品項攤平在一起） */
   gifts?: GiftDto[];
   ceremonyRegistration?: CeremonyRegistrationDto;
   /** 整戶報名時，該戶籍下每一位信徒各自的報名紀錄 */
