@@ -63,6 +63,7 @@ import { useAuth } from "../context/AuthContext";
 import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportRowsToExcel, exportSheetsToExcel } from "../utils/export";
 import { buildPilgrimageWorkbook } from "../utils/pilgrimageReport";
+import { exportLanternWallExcel } from "../utils/lanternWallExcel";
 import {
   buildBusRosterHtml,
   buildParticipantRosterHtml,
@@ -1522,6 +1523,23 @@ function LanternWallListCard({
   const [editingWall, setEditingWall] = useState<LanternWallDto | null>(null);
   const wallsQuery = useQuery({ queryKey: ["walls", templeId], queryFn: () => listWalls(templeId) });
 
+  const [exportingWallId, setExportingWallId] = useState<string | null>(null);
+  const handleExportSlots = async (wall: LanternWallDto) => {
+    setExportingWallId(wall.id);
+    try {
+      const slots = await getWallSlots(wall.id);
+      if (slots.length === 0) {
+        message.warning("這面燈牆還沒有燈位");
+        return;
+      }
+      await exportLanternWallExcel(wall, slots);
+    } catch {
+      message.error("匯出失敗，請重試");
+    } finally {
+      setExportingWallId(null);
+    }
+  };
+
   const deleteMutation = useMutation({
     mutationFn: ({ id, force }: { id: string; force: boolean }) => deleteWall(id, force),
     onSuccess: (_data, variables) => {
@@ -1591,9 +1609,12 @@ function LanternWallListCard({
           {
             title: "操作",
             render: (_: unknown, record: LanternWallDto) => (
-              <Space>
+              <Space wrap>
                 <Button size="small" onClick={() => setEditingWall(record)}>
                   編輯
+                </Button>
+                <Button size="small" loading={exportingWallId === record.id} onClick={() => handleExportSlots(record)}>
+                  匯出燈位 Excel
                 </Button>
                 <Popconfirm
                   title="確定要刪除此燈牆嗎？"

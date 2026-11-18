@@ -12,8 +12,10 @@ export async function apiAs(request: APIRequestContext, username: string) {
     get: async (path: string) => (await request.get(`${API}${path}`, { headers })).json(),
     post: async (path: string, data: object) => {
       const res = await request.post(`${API}${path}`, { headers, data });
-      expect(res.ok(), `${path} → ${res.status()} ${await res.text()}`).toBeTruthy();
-      return res.json();
+      const text = await res.text();
+      expect(res.ok(), `${path} → ${res.status()} ${text}`).toBeTruthy();
+      // 有些 API 成功時不回傳內容（例如產生燈位），空的就不解析
+      return text ? JSON.parse(text) : undefined;
     },
     templeId: async () => (await (await request.get(`${API}/temples`, { headers })).json())[0].id as string,
   };
