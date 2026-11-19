@@ -47,11 +47,17 @@ const report = (overrides: Partial<CeremonyReportDto> = {}): CeremonyReportDto =
     ...overrides,
   }) as CeremonyReportDto;
 
-const sheet = (name: string, r = report()) => buildPilgrimageWorkbook(r).find((s) => s.name === name)!.rows;
+// 車次名單的功能保留（目前畫面不顯示），測試時明確打開，確認之後重新啟用時內容仍然正確
+const sheet = (name: string, r = report()) => buildPilgrimageWorkbook(r, true).find((s) => s.name === name)!.rows;
 
 describe("進香總表 Excel", () => {
-  it("四個工作表依序是房型名單、車次名單、收入支出總表、收禮資訊", () => {
-    expect(buildPilgrimageWorkbook(report()).map((s) => s.name)).toEqual(["房型名單", "車次名單", "收入支出總表", "收禮資訊"]);
+  it("開啟車次時四個工作表依序是房型名單、車次名單、收入支出總表、收禮資訊", () => {
+    expect(buildPilgrimageWorkbook(report(), true).map((s) => s.name)).toEqual(["房型名單", "車次名單", "收入支出總表", "收禮資訊"]);
+  });
+
+  it("目前進香不需要車次：預設只有房型名單、收入支出總表、收禮資訊三個工作表", () => {
+    expect(buildPilgrimageWorkbook(report()).map((s) => s.name)).toEqual(["房型名單", "收入支出總表", "收禮資訊"]);
+    expect(buildPilgrimageWorkbook(report(), false).map((s) => s.name)).toEqual(["房型名單", "收入支出總表", "收禮資訊"]);
   });
 
   it("房型名單：每個房型一塊，參加者橫向排開（欄數 = 每間人數），項次是第幾間；沒人訂的房型也留標題列", () => {

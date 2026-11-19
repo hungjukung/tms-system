@@ -153,10 +153,10 @@ function giftSheet(report: CeremonyReportDto): ReportSheet {
 }
 
 /** 進香總表（一個 Excel 四個工作表）：房型名單、車次名單、收入支出總表、收禮資訊 */
-export function buildPilgrimageWorkbook(report: CeremonyReportDto): ReportSheet[] {
+export function buildPilgrimageWorkbook(report: CeremonyReportDto, includeBus: boolean = SHOW_PILGRIMAGE_BUS): ReportSheet[] {
   return [
     roomRosterSheet(report),
-    ...(SHOW_PILGRIMAGE_BUS ? [busRosterSheet(report)] : []),
+    ...(includeBus ? [busRosterSheet(report)] : []),
     summarySheet(report),
     giftSheet(report),
   ];
