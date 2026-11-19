@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   App,
@@ -1739,7 +1739,8 @@ function LanternFields({
   // 單人點燈已選的燈位與各自的燈種：純粹是畫面狀態，不放進表單欄位
   // （曾放在隱藏的 Input 欄位裡，結果選第二盞燈種時會把第一盞的值蓋掉）
   const [picked, setPicked] = useState<PickedLantern[]>([]);
-  const householdLanternType = Form.useWatch("householdLanternType", form) as string | undefined;
+  const wasTaisuiWall = useRef(false);
+  const lanternType = Form.useWatch("lanternType", form) as string | undefined;
   const householdSlotIds = Form.useWatch("householdSlotIds", form) as string[] | undefined;
   const householdSlotLabel = Form.useWatch("householdSlotLabel", form);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
@@ -1775,9 +1776,16 @@ function LanternFields({
     setPicked([]);
     form.setFieldValue("householdSlotIds", undefined);
     form.setFieldValue("householdSlotLabel", undefined);
-    form.setFieldValue("householdLanternType", wall?.isTaisuiWall ? TAISUI_LANTERN_TYPE : undefined);
+    if (wall?.isTaisuiWall) {
+      form.setFieldValue("lanternType", TAISUI_LANTERN_TYPE);
+    } else if (wasTaisuiWall.current) {
+      // 從太歲燈牆換成一般燈牆：原本的「太歲燈」是系統強制帶入的，清掉讓櫃台重新選；
+      // 一般燈牆之間切換則保留櫃台自己選好的燈種
+      form.setFieldValue("lanternType", undefined);
+    }
+    wasTaisuiWall.current = !!wall?.isTaisuiWall;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wallId]);
+  }, [wallId, wall?.isTaisuiWall]);
 
   // 換戶籍或換報名者類型時，已選的整戶燈位失效，一併清空
   useEffect(() => {
@@ -1789,16 +1797,17 @@ function LanternFields({
   // 金額依燈種自動算出且鎖定：單人 = 各燈位燈種價格相加；整戶 = 燈種價格 × 戶內人數
   const totalAmount =
     payerMode === "household"
-      ? (priceOf(householdLanternType) ?? 0) * headcount
+      ? (priceOf(lanternType) ?? 0) * headcount
       : picked.reduce((sum, p) => sum + (priceOf(p.lanternType) ?? 0), 0);
   useEffect(() => {
     form.setFieldValue("amount", totalAmount);
   }, [totalAmount, form]);
 
-  const canPickSlot = !!wallId && (payerMode === "household" ? headcount > 0 : true);
+  // 先選燈種，再選燈牆和燈位
+  const canPickSlot = !!lanternType && !!wallId && (payerMode === "household" ? headcount > 0 : true);
   const readyToAdd =
     payerMode === "household"
-      ? (householdSlotIds?.length ?? 0) === headcount && headcount > 0 && !!householdLanternType
+      ? (householdSlotIds?.length ?? 0) === headcount && headcount > 0 && !!lanternType
       : picked.length > 0 && picked.every((p) => !!p.lanternType);
 
   /**
@@ -1809,7 +1818,7 @@ function LanternFields({
   const handleAdd = async () => {
     const values = await form.validateFields();
     if (payerMode === "household") {
-      const type = householdLanternType as string;
+      const type = lanternType as string;
       const householdRequest: ClaimHouseholdLanternSlotsRequest = {
         wallId: values.wallId,
         householdId: values.householdId,
@@ -1827,7 +1836,6 @@ function LanternFields({
       form.setFieldsValue({
         householdSlotIds: undefined,
         householdSlotLabel: undefined,
-        householdLanternType: wall?.isTaisuiWall ? TAISUI_LANTERN_TYPE : undefined,
       });
     } else {
       const payerName = payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
@@ -1911,6 +1919,26 @@ function LanternFields({
             <Input />
           </Form.Item>
         )}
+        <Form.Item
+          label="燈種（先選燈種，再選燈牆和燈位）"
+          name="lanternType"
+          rules={[{ required: true, message: "請選擇燈種" }]}
+          extra={
+            wall?.isTaisuiWall
+              ? "太歲燈牆固定點「太歲燈」，不開放更改"
+              : payerMode === "household"
+                ? "整戶點同一種燈，金額 = 燈種價格 × 戶內人數"
+                : "選好後，選到的燈位都先用這個燈種；個別燈位可以再改成別種"
+          }
+        >
+          <Select
+            disabled={wall?.isTaisuiWall}
+            loading={typesQuery.isLoading}
+            options={typeOptions}
+            placeholder="請選擇燈種"
+            onChange={(value) => setPicked((current) => current.map((p) => ({ ...p, lanternType: value })))}
+          />
+        </Form.Item>
         <Form.Item label="燈牆" name="wallId" rules={[{ required: true, message: "請選擇燈牆" }]}>
           <Select
             placeholder="尚無燈牆，請先新增"
@@ -1923,9 +1951,9 @@ function LanternFields({
         {payerMode !== "household" && (
           <>
             <Form.Item
-              label="燈位與燈種（一次可選多個燈位，每個燈位各點一種燈）"
+              label="燈位（一次可選多個燈位，每個燈位各點一種燈）"
               required
-              extra="先選燈位，再替每個燈位選燈種；金額依燈種自動計算"
+              extra="選好燈位後，每個燈位預設是上面選的燈種，可以個別改；金額依燈種自動計算"
             >
               <Space direction="vertical" style={{ width: "100%" }}>
                 <Button disabled={!canPickSlot} onClick={() => setSlotModalOpen(true)}>
@@ -1959,19 +1987,6 @@ function LanternFields({
         )}
         {payerMode === "household" && (
           <>
-            <Form.Item
-              label="燈種（整戶點同一種燈）"
-              name="householdLanternType"
-              rules={[{ required: true, message: "請選擇燈種" }]}
-              extra={wall?.isTaisuiWall ? "太歲燈牆固定點「太歲燈」，不開放更改" : undefined}
-            >
-              <Select
-                disabled={wall?.isTaisuiWall}
-                loading={typesQuery.isLoading}
-                options={typeOptions}
-                placeholder="請選擇燈種"
-              />
-            </Form.Item>
             <Form.Item label="燈位" required>
               <Space align="center" wrap>
                 <Button disabled={!canPickSlot} onClick={() => setSlotModalOpen(true)}>
@@ -1987,7 +2002,7 @@ function LanternFields({
           name="amount"
           extra={
             payerMode === "household"
-              ? `${householdLanternType ?? "燈種"}每盞 NT$ ${(priceOf(householdLanternType) ?? 0).toLocaleString()} × ${headcount || "?"} 人`
+              ? `${lanternType ?? "燈種"}每盞 NT$ ${(priceOf(lanternType) ?? 0).toLocaleString()} × ${headcount || "?"} 人`
               : picked.length > 0
                 ? picked.map((p) => `${p.code} ${p.lanternType ?? "（未選燈種）"} ${priceOf(p.lanternType) ?? 0}`).join("＋")
                 : undefined
@@ -2037,7 +2052,7 @@ function LanternFields({
                   slot: s,
                   slotId: s.id,
                   code: s.code,
-                  lanternType: keep.get(s.id) ?? (wall?.isTaisuiWall ? TAISUI_LANTERN_TYPE : undefined),
+                  lanternType: keep.get(s.id) ?? lanternType,
                 })),
               );
             }

@@ -15,6 +15,18 @@ async function selectWall(page: Page, wallName: string) {
   await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: wallName }).click();
 }
 
+/** 從目前打開的下拉選單選一項；選項可能被畫面下緣遮住，直接觸發點擊，並等面板關閉再繼續 */
+async function chooseOption(page: Page, text: string) {
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: text }).first().dispatchEvent("click");
+  await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
+}
+
+/** 點燈表單第一步：選燈種 */
+async function selectLanternType(page: Page, type: string) {
+  await page.getByRole("combobox", { name: /燈種（先選燈種/ }).click({ force: true });
+  await chooseOption(page, type);
+}
+
 /**
  * E2E：點燈依燈種計價。
  * 一次選多個燈位、每個燈位各點一種燈，金額依燈種自動加總且鎖定；總幹事在系統設定改價格後立刻生效。
@@ -37,7 +49,7 @@ async function createWall(request: Parameters<typeof apiAs>[0], count: number, i
   return { api, name, wall };
 }
 
-test("一次選 3 個燈位、各點一種燈：金額自動加總且不能改，收據每盞一個項目", async ({ page, request }) => {
+test("先選燈種再選燈牆與燈位：一次選 3 個燈位都先套用這個燈種，可以個別改；金額自動加總且不能改", async ({ page, request }) => {
   const { name } = await createWall(request, 3);
   await loginWithTemple(page, "volunteer");
   await page.locator(".ant-menu").getByText("活動報名", { exact: true }).click();
@@ -46,11 +58,19 @@ test("一次選 3 個燈位、各點一種燈：金額自動加總且不能改�
 
   await radioButton(card, "臨櫃香客（免建檔）").click();
   await card.getByLabel("姓名", { exact: true }).fill("龔忠欣");
-  await selectWall(page, name);
 
-  // 燈牆不再顯示每盞價格；金額欄是鎖定的
+  // 欄位順序：燈種在燈牆之前
+  const labels = await card.locator(".ant-form-item-label label").allInnerTexts();
+  expect(labels.findIndex((l) => l.startsWith("燈種"))).toBeLessThan(labels.findIndex((l) => l === "燈牆"));
+
+  await selectWall(page, name);
+  // 燈牆不再顯示每盞價格；金額欄是鎖定的；還沒選燈種不能選燈位
   await expect(page.locator(".ant-select-selection-item", { hasText: name })).not.toContainText("NT$");
   await expect(card.getByRole("spinbutton", { name: /金額/ })).toBeDisabled();
+  await expect(card.getByRole("button", { name: "選擇燈位" })).toBeDisabled();
+
+  // 先選燈種
+  await selectLanternType(page, "平安燈(大)");
 
   // 一次選 3 個燈位
   await card.getByRole("button", { name: "選擇燈位" }).click();
@@ -58,25 +78,23 @@ test("一次選 3 個燈位、各點一種燈：金額自動加總且不能改�
   for (const code of ["A-01", "A-02", "A-03"]) await modal.locator(".slot-cell", { hasText: code }).click();
   await modal.getByRole("button", { name: /確認選位/ }).click();
 
-  // 還沒選燈種不能加入
+  // 3 個燈位都先套用「平安燈(大)」，可以直接加入
   const add = card.getByRole("button", { name: "加入本次點燈項目" });
-  await expect(add).toBeDisabled();
+  const slotRow = (code: string) =>
+    card.locator(".ant-space-align-center", { has: page.locator(".ant-tag", { hasText: new RegExp(`^${code}$`) }) });
+  for (const code of ["A-01", "A-02", "A-03"]) {
+    await expect(slotRow(code).locator(".ant-select-selection-item")).toContainText("平安燈(大)");
+  }
+  await expect(card.getByRole("spinbutton", { name: /金額/ })).toHaveValue("15000");
+  await expect(add).toBeEnabled();
 
-  // 每個燈位各選一種燈種
-  const typeSelects = card.locator(".ant-select").filter({ hasText: "請選擇燈種" });
-  // 下拉選項可能被畫面下緣遮住，改直接觸發選項的點擊事件（不依賴捲動位置）
-  const pick = async (index: number, type: string) => {
-    // 每個燈位是一列（標籤＋下拉）；用「剛好只含這個燈位標籤」的那一列，避免比對到包住全部燈位的外層容器
-    await card.locator(".ant-space-align-center", { has: page.locator(".ant-tag", { hasText: new RegExp(`^A-0${index + 1}$`) }) }).locator(".ant-select").click();
-    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: type }).first().dispatchEvent("click");
-    // 等這個下拉面板完全關閉再選下一個：否則 :visible 會抓到還在淡出的舊面板，把選項套到上一個燈位
-    await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
+  // 個別改成別種燈
+  const pick = async (code: string, type: string) => {
+    await slotRow(code).locator(".ant-select").click();
+    await chooseOption(page, type);
   };
-  await expect(typeSelects).toHaveCount(3);
-  await pick(0, "平安燈(大)");
-  await pick(1, "光明燈");
-  await expect(add).toBeDisabled(); // 還有一盞沒選
-  await pick(2, "太歲燈");
+  await pick("A-02", "光明燈");
+  await pick("A-03", "太歲燈");
 
   // 金額 = 5000 + 600 + 500
   await expect(card.getByRole("spinbutton", { name: /金額/ })).toHaveValue("6100");
@@ -103,7 +121,12 @@ test("太歲燈牆：燈種自動帶入且不能改，金額是太歲燈的價�
   const card = page.locator(".ant-card").filter({ has: page.locator(".ant-card-head-title", { hasText: /^點燈$/ }) });
   await radioButton(card, "臨櫃香客（免建檔）").click();
   await card.getByLabel("姓名", { exact: true }).fill("甲");
+  await selectLanternType(page, "光明燈");
+  // 選到太歲燈牆：燈種自動換成「太歲燈」並鎖定
   await selectWall(page, name);
+  const typeField = card.locator(".ant-form-item", { has: page.getByRole("combobox", { name: /燈種（先選燈種/ }) });
+  await expect(typeField.locator(".ant-select-selection-item")).toHaveText(/太歲燈/);
+  await expect(typeField.locator(".ant-select")).toHaveClass(/ant-select-disabled/);
   await card.getByRole("button", { name: "選擇燈位" }).click();
   await page.locator(".ant-modal", { hasText: `選擇燈位：${name}` }).locator(".slot-cell", { hasText: "A-01" }).click();
   await page.locator(".ant-modal", { hasText: `選擇燈位：${name}` }).getByRole("button", { name: /確認選位/ }).click();
@@ -153,13 +176,13 @@ test("總幹事在系統設定修改燈種價格：儲存後報名頁立刻用�
     const lantern = page.locator(".ant-card").filter({ has: page.locator(".ant-card-head-title", { hasText: /^點燈$/ }) });
     await radioButton(lantern, "臨櫃香客（免建檔）").click();
     await lantern.getByLabel("姓名", { exact: true }).fill("甲");
+    // 新增的燈種出現在選單裡，價格是新價格
+    await selectLanternType(page, "文昌燈");
     await selectWall(page, name);
     await lantern.getByRole("button", { name: "選擇燈位" }).click();
     const modal = page.locator(".ant-modal", { hasText: `選擇燈位：${name}` });
     await modal.locator(".slot-cell", { hasText: "A-01" }).click();
     await modal.getByRole("button", { name: /確認選位/ }).click();
-    await lantern.locator(".ant-space-align-center", { has: page.locator(".ant-tag", { hasText: /^A-01$/ }) }).locator(".ant-select").click();
-    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: "文昌燈" }).click();
     await expect(lantern.getByRole("spinbutton", { name: /金額/ })).toHaveValue("800");
 
     // 後端：舊價格被拒絕、新價格通過

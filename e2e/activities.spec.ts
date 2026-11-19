@@ -429,9 +429,14 @@ test.describe("活動建立與報名", () => {
     await expect(page.locator(".ant-select-dropdown:visible .ant-select-item-option-disabled", { hasText: "四人房" })).toContainText(
       "每人費用不同",
     );
-    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: "三人房" }).click();
+    // 選項可能被畫面下緣遮住：直接觸發點擊，並等面板關閉再開下一個（避免點到還在淡出的舊面板）
+    const choose = async (text: string) => {
+      await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: text }).first().dispatchEvent("click");
+      await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
+    };
+    await choose("三人房");
     await moveSelect("車次（目前").click();
-    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: "第 2 車" }).click();
+    await choose("第 2 車");
     await moveModal.getByRole("button", { name: "確認調整" }).click();
 
     await expect(page.getByText(/已調整：車次 第1車 → 第2車；房型 雙人房 第1間 → 三人房 第1間/)).toBeVisible();
