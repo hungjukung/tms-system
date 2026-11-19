@@ -56,7 +56,7 @@ import { getReceiptDetails } from "../api/print";
 import { useAuth } from "../context/AuthContext";
 import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportReceiptCertificatePdf, exportRowsToExcel } from "../utils/export";
-import { ALLOW_PILGRIMAGE_MULTI_PARTICIPANTS, SHOW_PILGRIMAGE_BUS } from "../utils/features";
+import { SHOW_PILGRIMAGE_BUS } from "../utils/features";
 import { lanternCellWidth } from "../utils/lanternCell";
 
 type ActivityKey = "lantern" | "donation" | "ceremony" | "gift";
@@ -181,6 +181,29 @@ function PendingItemsList({
   );
 }
 
+/**
+ * 沒有勾選「多人報名」時，整張收據只在最上方填一次報名者，點燈、捐款、活動報名、送禮都沿用這個人。
+ * 各區塊仍保留自己的（隱藏）報名者欄位，用這個值同步進去，後面的驗證與送出邏輯完全不用改。
+ */
+type SharedPayer = { mode: "member" | "walkIn"; memberId?: string; walkInName?: string; name: string; ready: boolean };
+
+const HIDDEN_STYLE = { display: "none" } as const;
+
+function useSyncSharedPayer(form: any, shared: SharedPayer | null, refreshKey: number) {
+  useEffect(() => {
+    if (!shared) return;
+    form.setFieldsValue({
+      payerMode: shared.mode,
+      memberId: shared.mode === "member" ? shared.memberId : undefined,
+      walkInName: shared.mode === "walkIn" ? shared.walkInName : undefined,
+    });
+    // 加入一筆項目後各區塊會清空自己的報名者欄位，refreshKey（已加入的筆數）變動時再同步回去
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shared?.mode, shared?.memberId, shared?.walkInName, refreshKey]);
+}
+
+const SHARED_PAYER_WARNING = "請先在最上方選擇報名者（或勾選「多人報名」分別填寫）";
+
 function DonationFields({
   form,
   ceremonies,
@@ -188,10 +211,12 @@ function DonationFields({
   pendingItems,
   onAddPending,
   onRemovePending,
+  shared,
 }: {
   form: any;
   ceremonies: CeremonyDto[];
   templeId: string;
+  shared: SharedPayer | null;
   pendingItems: PendingDonationItem[];
   onAddPending: (item: PendingDonationItem) => void;
   onRemovePending: (index: number) => void;
@@ -202,10 +227,15 @@ function DonationFields({
   const payerMode = Form.useWatch("payerMode", form) ?? "member";
   const ceremonyId = Form.useWatch("ceremonyId", form);
   const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
+  useSyncSharedPayer(form, shared, pendingItems.length);
 
   const handleAdd = async () => {
+    if (shared && !shared.ready) {
+      message.warning(SHARED_PAYER_WARNING);
+      return;
+    }
     const values = await form.validateFields();
-    const payerName = values.payerMode === "walkIn" ? values.walkInName?.trim() : (selectedMemberName ?? "");
+    const payerName = values.payerMode === "walkIn" ? values.walkInName?.trim() : (shared?.name ?? selectedMemberName ?? "");
     const ceremonyName = ceremonies.find((c) => c.id === values.ceremonyId)?.name;
     const typeText = ceremonyName ? `活動捐款（${ceremonyName}）` : (donationTypeLabel[values.type as DonationType] ?? "捐款");
     onAddPending({
@@ -231,6 +261,7 @@ function DonationFields({
   return (
     <Card title="捐款收費">
       <Form form={form} name="donation" layout="vertical">
+        <div style={shared ? HIDDEN_STYLE : undefined}>
         <Form.Item label="香客類型" name="payerMode" initialValue="member">
           <Radio.Group>
             <Radio.Button value="member">已建檔信徒</Radio.Button>
@@ -246,6 +277,7 @@ function DonationFields({
             <Input placeholder="請輸入姓名" />
           </Form.Item>
         )}
+        </div>
         <Form.Item
           label="指定活動（選填）"
           name="ceremonyId"
@@ -306,10 +338,12 @@ function GiftFields({
   pendingItems,
   onAddPending,
   onRemovePending,
+  shared,
 }: {
   form: any;
   ceremonies: CeremonyDto[];
   templeId: string;
+  shared: SharedPayer | null;
   pendingItems: PendingGiftItem[];
   onAddPending: (item: PendingGiftItem) => void;
   onRemovePending: (index: number) => void;
@@ -318,10 +352,15 @@ function GiftFields({
   const payerMode = Form.useWatch("payerMode", form) ?? "member";
   const giftTypes = (Form.useWatch("giftTypes", form) ?? []) as GiftType[];
   const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
+  useSyncSharedPayer(form, shared, pendingItems.length);
 
   const handleAdd = async () => {
+    if (shared && !shared.ready) {
+      message.warning(SHARED_PAYER_WARNING);
+      return;
+    }
     const values = await form.validateFields();
-    const payerName = values.payerMode === "walkIn" ? values.walkInName?.trim() : (selectedMemberName ?? "");
+    const payerName = values.payerMode === "walkIn" ? values.walkInName?.trim() : (shared?.name ?? selectedMemberName ?? "");
     const items = (values.giftTypes as GiftType[]).map((giftType) => ({
       giftType,
       quantity: values.quantities?.[giftType] || 1,
@@ -345,6 +384,7 @@ function GiftFields({
   return (
     <Card title="送禮">
       <Form form={form} name="gift" layout="vertical">
+        <div style={shared ? HIDDEN_STYLE : undefined}>
         <Form.Item label="捐贈者類型" name="payerMode" initialValue="member">
           <Radio.Group>
             <Radio.Button value="member">已建檔信徒</Radio.Button>
@@ -360,6 +400,7 @@ function GiftFields({
             <Input placeholder="請輸入姓名" />
           </Form.Item>
         )}
+        </div>
         <Form.Item
           label="屬於哪個活動（選填）"
           name="ceremonyId"
@@ -814,7 +855,12 @@ function CeremonyRegistrationFields({
   pendingItems,
   onAddPending,
   onRemovePending,
+  shared,
+  multi,
 }: {
+  shared: SharedPayer | null;
+  /** 勾選「多人報名」：進香可以登錄多位參加者 */
+  multi: boolean;
   ceremonies: CeremonyDto[];
   pendingItems: PendingCeremonyItem[];
   onAddPending: (item: PendingCeremonyItem) => void;
@@ -841,6 +887,7 @@ function CeremonyRegistrationFields({
   const selectedCeremony = ceremonies.find((c) => c.id === ceremonyId);
   const [seatModalOpen, setSeatModalOpen] = useState(false);
   const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
+  useSyncSharedPayer(form, shared, pendingItems.length);
 
   const householdMembersQuery = useQuery({
     queryKey: ["household-members", householdId],
@@ -979,7 +1026,25 @@ function CeremonyRegistrationFields({
    * 「加入」不會呼叫任何 API、不會建立資料庫紀錄，只是把這次報名的內容暫存到本次收據的項目清單裡；
    * 真正的報名紀錄（含配位）要到最後「送出並開立收據」才會建立，避免忘記送出時留下佔位卻沒收據的孤兒資料。
    */
+  // 進香、沒有勾選多人報名：參加者就是最上方的報名者（一人）
+  useEffect(() => {
+    if (!shared || !isPilgrimage) return;
+    form.setFieldValue("participants", [
+      {
+        mode: shared.mode,
+        memberId: shared.mode === "member" ? shared.memberId : undefined,
+        memberName: shared.name,
+        name: shared.mode === "walkIn" ? shared.walkInName : undefined,
+      },
+    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shared?.mode, shared?.memberId, shared?.walkInName, shared?.name, isPilgrimage, pendingItems.length]);
+
   const handleAdd = async () => {
+    if (shared && !shared.ready) {
+      message.warning(SHARED_PAYER_WARNING);
+      return;
+    }
     const values = await form.validateFields();
     // 進香：參加者名單第 1 位是收據上的報名者，其餘是同行參加者
     const plist = (isMultiSeatMode ? (values.participants ?? []) : []) as PilgrimParticipant[];
@@ -1092,7 +1157,7 @@ function CeremonyRegistrationFields({
     const ceremonyName = selectedCeremony?.name ?? "";
     let displayLabel: string;
     if (values.payerMode === "table") {
-      displayLabel = `${ceremonyName}（${selectedMemberName ?? ""} 認領整桌${tableLabel ? `　${tableLabel}` : ""}）`;
+      displayLabel = `${ceremonyName}（${shared?.name ?? selectedMemberName ?? ""} 認領整桌${tableLabel ? `　${tableLabel}` : ""}）`;
     } else if (values.payerMode === "household") {
       const names = householdMembersQuery.data?.map((m) => m.name).join("、") ?? "";
       displayLabel = `${ceremonyName}（整戶 ${names}${householdSeatLabel ? `　${householdSeatLabel}` : ""}）`;
@@ -1100,7 +1165,7 @@ function CeremonyRegistrationFields({
       const namesText = plist.map((pt) => pilgrimParticipantName(pt)).join("、");
       displayLabel = `${ceremonyName}（${effectiveBus ? `第${effectiveBus}車　` : ""}${selectedRoom ? `${selectedRoom.name}　` : ""}${namesText}）`;
     } else {
-      const payerName = values.payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
+      const payerName = values.payerMode === "member" ? (shared?.name ?? selectedMemberName ?? "") : values.walkInName;
       displayLabel = `${ceremonyName}（${payerName}${
         isJigai ? `　${session === CeremonySession.AM ? "上午場" : "下午場"}` : request.noSeatNeeded ? "，不需要座位" : seatLabel ? `　${seatLabel}` : ""
       }）`;
@@ -1199,7 +1264,7 @@ function CeremonyRegistrationFields({
                 const left = roomsLeftOf(r);
                 return {
                   value: r.name,
-                  label: ALLOW_PILGRIMAGE_MULTI_PARTICIPANTS
+                  label: multi
                     ? `${r.name}（每間最多 ${r.capacity} 人，每人 NT$ ${r.fee}${left != null ? `，剩 ${Math.max(left, 0)} 間` : ""}）`
                     : `${r.name}（NT$ ${r.fee}${left != null ? `，剩 ${Math.max(left, 0)} 間` : ""}）`,
                   disabled: left != null && left <= 0,
@@ -1252,6 +1317,7 @@ function CeremonyRegistrationFields({
             </Radio.Group>
           </Form.Item>
         )}
+        <div style={shared || isPilgrimage ? HIDDEN_STYLE : undefined}>
         <Form.Item label="報名者類型" name="payerMode" initialValue="member">
           <Radio.Group>
             <Radio.Button value="member">{isPilgrimage ? "登錄參加者（可多人）" : "已建檔信徒"}</Radio.Button>
@@ -1260,7 +1326,9 @@ function CeremonyRegistrationFields({
             {needsSeatPicker && !isPilgrimage && <Radio.Button value="table">認領整桌</Radio.Button>}
           </Radio.Group>
         </Form.Item>
-        {isMultiSeatMode ? (
+        </div>
+<div style={shared ? HIDDEN_STYLE : undefined}>
+                {isMultiSeatMode ? (
           <Form.List name="participants" initialValue={[{ mode: "member" }]}>
             {(fields, { add, remove }) => (
               <Form.Item label={`參加者（共 ${fields.length} 位，第 1 位是收據上的報名者）`} required>
@@ -1318,7 +1386,7 @@ function CeremonyRegistrationFields({
                       </Card>
                     );
                   })}
-                  {ALLOW_PILGRIMAGE_MULTI_PARTICIPANTS && selectedRoom && (
+                  {multi && selectedRoom && (
                     <Typography.Text type={overRoomCapacity ? "danger" : "secondary"}>
                       {selectedRoom.name}每間最多 {selectedRoom.capacity} 人，目前 {fields.length} 人
                       {overRoomCapacity ? "，請移除多出的參加者或改選較大的房型" : ""}
@@ -1329,7 +1397,7 @@ function CeremonyRegistrationFields({
                       第 {effectiveBus} 車座位不足，只剩 {Math.max(busSeatsLeft ?? 0, 0)} 位，請改選其他車次
                     </Typography.Text>
                   )}
-                  {ALLOW_PILGRIMAGE_MULTI_PARTICIPANTS && (!selectedRoom || fields.length < selectedRoom.capacity) && (
+                  {multi && (!selectedRoom || fields.length < selectedRoom.capacity) && (
                     <Button type="dashed" block onClick={() => add({ mode: "member" })}>
                       ＋ 新增參加者
                     </Button>
@@ -1372,7 +1440,8 @@ function CeremonyRegistrationFields({
             </Form.Item>
           </>
         )}
-        <Form.Item label="祈願內容" name="wishText">
+        </div>
+                <Form.Item label="祈願內容" name="wishText">
           <Input.TextArea rows={2} placeholder="活動宣讀用，例如：闔家平安、消災解厄" />
         </Form.Item>
         <Form.Item
@@ -1718,7 +1787,9 @@ function LanternFields({
   pendingItems,
   onAddPending,
   onRemovePending,
+  shared,
 }: {
+  shared: SharedPayer | null;
   templeId: string;
   pendingItems: PendingLanternItem[];
   onAddPending: (item: PendingLanternItem) => void;
@@ -1738,6 +1809,7 @@ function LanternFields({
   const householdSlotLabel = Form.useWatch("householdSlotLabel", form);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
   const [selectedMemberName, setSelectedMemberName] = useState<string | undefined>();
+  useSyncSharedPayer(form, shared, pendingItems.length);
 
   const wallsQuery = useQuery({ queryKey: ["walls", templeId], queryFn: () => listWalls(templeId) });
   const wall = wallsQuery.data?.find((w) => w.id === wallId);
@@ -1809,6 +1881,10 @@ function LanternFields({
    * 單人一次選好幾個燈位時，每個燈位各自是一個項目（各點一種燈、各一筆金額）。
    */
   const handleAdd = async () => {
+    if (shared && !shared.ready) {
+      message.warning(SHARED_PAYER_WARNING);
+      return;
+    }
     const values = await form.validateFields();
     if (payerMode === "household") {
       const type = lanternType as string;
@@ -1831,7 +1907,7 @@ function LanternFields({
         householdSlotLabel: undefined,
       });
     } else {
-      const payerName = payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
+      const payerName = payerMode === "member" ? (shared?.name ?? selectedMemberName ?? "") : values.walkInName;
       for (const p of picked) {
         const price = priceOf(p.lanternType) ?? 0;
         const singleRequest: ClaimLanternSlotRequest = {
@@ -1872,6 +1948,7 @@ function LanternFields({
   return (
     <Card title="點燈">
       <Form form={form} name="lantern" layout="vertical">
+        <div style={shared ? HIDDEN_STYLE : undefined}>
         <Form.Item label="報名者類型" name="payerMode" initialValue="member">
           <Radio.Group>
             <Radio.Button value="member">已建檔信徒</Radio.Button>
@@ -1912,6 +1989,7 @@ function LanternFields({
             <Input />
           </Form.Item>
         )}
+        </div>
         <Form.Item
           label="燈種（先選燈種，再選燈牆和燈位）"
           name="lanternType"
@@ -2101,6 +2179,21 @@ export function ActivityRegistrationPage() {
   const [pendingGiftItems, setPendingGiftItems] = useState<PendingGiftItem[]>([]);
   const [donationForm] = Form.useForm();
   const [giftForm] = Form.useForm();
+  // 「多人報名」：沒勾選時整張收據只填一次報名者，各區塊沿用；勾選才分別填寫
+  const [multi, setMulti] = useState(false);
+  const [payerMode, setPayerMode] = useState<"member" | "walkIn">("member");
+  const [payerMemberId, setPayerMemberId] = useState<string | undefined>();
+  const [payerMemberName, setPayerMemberName] = useState<string | undefined>();
+  const [payerWalkInName, setPayerWalkInName] = useState("");
+  const shared: SharedPayer | null = multi
+    ? null
+    : {
+        mode: payerMode,
+        memberId: payerMemberId,
+        walkInName: payerWalkInName.trim() || undefined,
+        name: payerMode === "member" ? (payerMemberName ?? "") : payerWalkInName.trim(),
+        ready: payerMode === "member" ? !!payerMemberId : !!payerWalkInName.trim(),
+      };
 
   const ceremoniesQuery = useQuery({
     queryKey: ["ceremonies", templeId, "active"],
@@ -2120,6 +2213,9 @@ export function ActivityRegistrationPage() {
       await openPrintWindow(`/print/receipt/${result.receipt.id}`);
 
       message.success("已開立收據");
+      setPayerMemberId(undefined);
+      setPayerMemberName(undefined);
+      setPayerWalkInName("");
       donationForm.resetFields();
       giftForm.resetFields();
       setPendingLanternItems([]);
@@ -2208,6 +2304,44 @@ export function ActivityRegistrationPage() {
         <>
           <Card>
             <Space direction="vertical" style={{ width: "100%" }}>
+              <Checkbox checked={multi} onChange={(e) => setMulti(e.target.checked)}>
+                多人報名
+              </Checkbox>
+              {multi ? (
+                <Typography.Text type="secondary">已勾選多人報名：各項目分別選擇或輸入報名者</Typography.Text>
+              ) : (
+                <>
+                  <Radio.Group
+                    value={payerMode}
+                    onChange={(e) => setPayerMode(e.target.value)}
+                    options={[
+                      { label: "已建檔信徒", value: "member" },
+                      { label: "臨櫃香客（免建檔）", value: "walkIn" },
+                    ]}
+                    optionType="button"
+                  />
+                  {payerMode === "member" ? (
+                    <MemberSelect
+                      value={payerMemberId}
+                      onChange={setPayerMemberId}
+                      onSelectMember={(m) => setPayerMemberName(m?.name)}
+                    />
+                  ) : (
+                    <Input
+                      value={payerWalkInName}
+                      maxLength={50}
+                      placeholder="報名者姓名"
+                      onChange={(e) => setPayerWalkInName(e.target.value)}
+                    />
+                  )}
+                  <Typography.Text type="secondary">報名者只需要填這一次，下面所有項目都沿用這個人</Typography.Text>
+                </>
+              )}
+            </Space>
+          </Card>
+
+          <Card>
+            <Space direction="vertical" style={{ width: "100%" }}>
               <Typography.Text strong>請勾選要辦理的項目：</Typography.Text>
               <Checkbox.Group
                 options={activityOptions}
@@ -2219,6 +2353,7 @@ export function ActivityRegistrationPage() {
 
           {selected.includes("lantern") && (
             <LanternFields
+              shared={shared}
               templeId={templeId}
               pendingItems={pendingLanternItems}
               onAddPending={(item) => setPendingLanternItems((prev) => [...prev, item])}
@@ -2227,6 +2362,7 @@ export function ActivityRegistrationPage() {
           )}
           {selected.includes("donation") && (
             <DonationFields
+              shared={shared}
               form={donationForm}
               ceremonies={ceremoniesQuery.data ?? []}
               templeId={templeId}
@@ -2241,6 +2377,8 @@ export function ActivityRegistrationPage() {
                 <Alert type="info" showIcon message="目前尚無活動，請總幹事至「建立活動」頁面先建立活動後才能報名" />
               )}
               <CeremonyRegistrationFields
+                shared={shared}
+                multi={multi}
                 ceremonies={ceremoniesQuery.data ?? []}
                 pendingItems={pendingCeremonyItems}
                 onAddPending={(item) => setPendingCeremonyItems((prev) => [...prev, item])}
@@ -2250,6 +2388,7 @@ export function ActivityRegistrationPage() {
           )}
           {selected.includes("gift") && (
             <GiftFields
+              shared={shared}
               form={giftForm}
               ceremonies={ceremoniesQuery.data ?? []}
               templeId={templeId}
