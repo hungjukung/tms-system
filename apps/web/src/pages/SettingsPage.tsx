@@ -6,6 +6,7 @@ import {
   Form,
   Image,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Select,
@@ -18,7 +19,7 @@ import {
 } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { UserAccountDto, UserRole } from "@tms/shared";
+import { LanternTypePrice, TAISUI_LANTERN_TYPE, UserAccountDto, UserRole } from "@tms/shared";
 import { getSettings, updateSettings, uploadChairmanSeal, uploadTempleSeal } from "../api/settings";
 import { createUserAccount, deleteUserAccount, listUsers, resetUserPassword, updateUserAccount } from "../api/users";
 import { useAuth } from "../context/AuthContext";
@@ -310,6 +311,104 @@ function SealUploader({
   );
 }
 
+/** 點燈的燈種與價格：點燈依燈種計價（每個燈位點一種燈），只有總幹事可以修改 */
+function LanternPriceCard({
+  templeId,
+  lanternTypes,
+  editable,
+}: {
+  templeId: string;
+  lanternTypes: LanternTypePrice[];
+  editable: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [form] = Form.useForm();
+  const mutation = useMutation({
+    mutationFn: (types: LanternTypePrice[]) => updateSettings(templeId, { lanternTypes: types }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["temple-settings", templeId], data);
+      queryClient.invalidateQueries({ queryKey: ["lantern-types", templeId] });
+      message.success("已儲存燈種與價格");
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      message.error(Array.isArray(msg) ? msg.join("；") : (msg ?? "儲存失敗，請重試"));
+    },
+  });
+
+  return (
+    <Card title="點燈燈種與價格（依燈種計價，每個燈位點一種燈）">
+      <Form
+        form={form}
+        name="lanternPrices"
+        layout="vertical"
+        initialValues={{ lanternTypes }}
+        onFinish={(values) => mutation.mutate(values.lanternTypes)}
+      >
+        <Form.List
+          name="lanternTypes"
+          rules={[
+            {
+              validator: async (_, value: LanternTypePrice[] | undefined) => {
+                if (!value?.length) throw new Error("請至少設定一種燈種");
+                if (!value.some((t) => t?.name?.trim() === TAISUI_LANTERN_TYPE)) {
+                  throw new Error(`一定要保留「${TAISUI_LANTERN_TYPE}」（太歲燈牆固定點這一種）`);
+                }
+              },
+            },
+          ]}
+        >
+          {(fields, { add, remove }, { errors }) => (
+            <Space direction="vertical" style={{ width: "100%" }}>
+              {fields.map((field) => (
+                <Space key={field.key} align="baseline" wrap>
+                  <Form.Item
+                    name={[field.name, "name"]}
+                    rules={[
+                      { required: true, whitespace: true, message: "請輸入燈種名稱" },
+                      { pattern: /^[^、]*$/, message: "名稱不可包含「、」" },
+                    ]}
+                    noStyle
+                  >
+                    <Input placeholder="燈種，例如：光明燈" style={{ width: 200 }} maxLength={20} disabled={!editable} />
+                  </Form.Item>
+                  <Form.Item name={[field.name, "price"]} rules={[{ required: true, message: "請輸入價格" }]} noStyle>
+                    <InputNumber placeholder="價格" min={0} addonBefore="NT$" style={{ width: 170 }} disabled={!editable} />
+                  </Form.Item>
+                  {editable && (
+                    <Button danger size="small" onClick={() => remove(field.name)}>
+                      刪除
+                    </Button>
+                  )}
+                </Space>
+              ))}
+              {editable && (
+                <Button type="dashed" block onClick={() => add({})}>
+                  ＋ 新增燈種
+                </Button>
+              )}
+              <Form.ErrorList errors={errors} />
+            </Space>
+          )}
+        </Form.List>
+        {editable && (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              style={{ margin: "16px 0" }}
+              message="修改後立刻生效，只影響之後的點燈；已經開出的收據金額不會變。已點的燈要換燈種，只能換成價格相同的。"
+            />
+            <Button type="primary" htmlType="submit" loading={mutation.isPending}>
+              儲存燈種與價格
+            </Button>
+          </>
+        )}
+      </Form>
+    </Card>
+  );
+}
+
 export function SettingsPage() {
   const { user } = useAuth();
   const { activeTempleId } = useTemple();
@@ -386,6 +485,13 @@ export function SettingsPage() {
           )}
         </Form>
       </Card>
+
+      <LanternPriceCard
+        key={JSON.stringify(settingsQuery.data.lanternTypes)}
+        templeId={templeId}
+        lanternTypes={settingsQuery.data.lanternTypes}
+        editable={isDirector}
+      />
 
       {isDirector && (
         <Card title="印信圖片（會自動印在每張收據 / 感謝狀上）">

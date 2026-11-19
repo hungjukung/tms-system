@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { TempleDto, TempleSettingsDto } from "@tms/shared";
+import { effectiveLanternTypes, normalizeLanternTypes } from "../lantern/lantern-types";
 import { Temple } from "./entities/temple.entity";
 import { UpdateSettingsDto } from "./dto/update-settings.dto";
 
@@ -28,7 +29,9 @@ export class SettingsService {
 
   async updateSettings(templeId: string, dto: UpdateSettingsDto): Promise<TempleSettingsDto> {
     const temple = await this.findTempleOrThrow(templeId);
-    Object.assign(temple, dto);
+    const { lanternTypes, ...rest } = dto;
+    Object.assign(temple, rest);
+    if (lanternTypes !== undefined) temple.lanternTypes = normalizeLanternTypes(lanternTypes);
     const saved = await this.templeRepo.save(temple);
     return this.toDto(saved);
   }
@@ -52,6 +55,7 @@ export class SettingsService {
     return {
       id: temple.id,
       name: temple.name,
+      lanternTypes: effectiveLanternTypes(temple.lanternTypes),
       templeName: temple.templeName,
       address: temple.address,
       phone: temple.phone,

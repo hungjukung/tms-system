@@ -35,6 +35,13 @@ export class LanternController {
     return this.lanternService.listWalls(templeId);
   }
 
+  /** 點燈的燈種與價格：報名頁依此計價（報名櫃檯人員也要能讀） */
+  @Get("lantern/types")
+  @Roles(UserRole.VOLUNTEER, UserRole.FINANCE, UserRole.DIRECTOR, UserRole.REGISTRAR)
+  listLanternTypes(@Query("templeId") templeId: string) {
+    return this.lanternService.getLanternTypes(templeId);
+  }
+
   /** 修改燈牆的點燈內容（例如「光明燈」「平安燈」） */
   @Patch("lantern/walls/:id")
   @Roles(UserRole.DIRECTOR)

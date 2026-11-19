@@ -1,3 +1,4 @@
+import { LanternTypePrice } from "@tms/shared";
 import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn } from "typeorm";
 
 @Entity("temples")
@@ -38,6 +39,10 @@ export class Temple {
 
   @Column({ type: "varchar", nullable: true })
   chairmanSealImagePath: string | null; // 主委簽章圖檔（相對 URL 路徑）
+
+  /** 點燈的燈種與價格；null 代表沿用預設清單 */
+  @Column({ type: "jsonb", nullable: true })
+  lanternTypes: LanternTypePrice[] | null;
 
   @CreateDateColumn({ type: "timestamptz" })
   createdAt: Date;

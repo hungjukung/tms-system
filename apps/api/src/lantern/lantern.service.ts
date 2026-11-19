@@ -36,6 +36,7 @@ import { ClaimHouseholdSlotsDto } from "./dto/claim-household-slots.dto";
 import { CreateDonationDto } from "./dto/create-donation.dto";
 import { CreateWallDto, GenerateSlotsDto, UpdateWallDto } from "./dto/create-wall.dto";
 import { LanternGateway } from "./lantern.gateway";
+import { assertLanternPrice, effectiveLanternTypes } from "./lantern-types";
 
 const PG_UNIQUE_VIOLATION = "23505";
 
@@ -66,7 +67,7 @@ export class LanternService {
       templeId: dto.templeId,
       name: dto.name,
       year: dto.year,
-      slotPrice: dto.slotPrice.toFixed(2),
+      slotPrice: (dto.slotPrice ?? 0).toFixed(2),
       isTaisuiWall: dto.isTaisuiWall ?? false,
     });
     const saved = await this.wallRepo.save(wall);
@@ -187,6 +188,13 @@ export class LanternService {
     return slots.map((slot) => this.toSlotDto(slot, claimBySlotId.get(slot.id), memberMap));
   }
 
+  /** 這間廟宇目前的燈種與價格（沒設定過就是預設清單） */
+  async getLanternTypes(templeId: string) {
+    const temple = await this.wallRepo.manager.findOne(Temple, { where: { id: templeId } });
+    if (!temple) throw new NotFoundException("找不到此廟宇");
+    return effectiveLanternTypes(temple.lanternTypes);
+  }
+
   /** 認領燈位並建立紀錄（不核發收據），供單一認領流程與「活動報名」合併收據流程共用 */
   private async claimSlotRecord(
     dto: ClaimSlotDto,
@@ -202,6 +210,8 @@ export class LanternService {
     if (dto.memberId) {
       await this.householdService.findMemberById(dto.memberId); // 確認信徒存在
     }
+    // 依燈種計價：燈種必須在設定清單裡，金額剛好等於該燈種價格
+    assertLanternPrice(await this.getLanternTypes(wall.templeId), dto.lanternType, dto.amount);
 
     const claim = this.claimRepo.create({
       slotId: dto.slotId,
@@ -255,9 +265,21 @@ export class LanternService {
     }
     if (dto.wishText !== undefined) claim.wishText = dto.wishText;
     if (dto.petitionText !== undefined) claim.petitionText = dto.petitionText;
-    if (dto.lanternType !== undefined) {
+    if (dto.lanternType !== undefined && dto.lanternType !== claim.lanternType) {
       if (!dto.lanternType?.trim()) throw new BadRequestException("點燈內容不可為空");
-      claim.lanternType = dto.lanternType;
+      // 金額已經開在收據上不能改，所以只能換成價格相同的燈種；價格不同請作廢收據重新點燈
+      const slotForType = await this.slotRepo.findOne({ where: { id: claim.slotId } });
+      const wallForType = slotForType ? await this.wallRepo.findOne({ where: { id: slotForType.wallId } }) : null;
+      if (!wallForType) throw new NotFoundException("找不到燈牆");
+      const types = await this.getLanternTypes(wallForType.templeId);
+      const target = types.find((t) => t.name === dto.lanternType!.trim());
+      if (!target) throw new BadRequestException(`找不到燈種「${dto.lanternType}」，請重新選擇`);
+      if (Math.round(target.price * 100) !== Math.round(Number(claim.amount) * 100)) {
+        throw new BadRequestException(
+          `${target.name}每盞 NT$ ${target.price}，與已收的 NT$ ${Number(claim.amount)} 不同，請作廢收據後重新點燈`,
+        );
+      }
+      claim.lanternType = target.name;
     }
 
     const saved = await this.claimRepo.save(claim);
@@ -295,6 +317,8 @@ export class LanternService {
       throw new BadRequestException("燈位不屬於此燈牆");
     }
 
+    // 整戶點同一種燈：金額 = 燈種價格 × 戶內人數
+    const lanternType = assertLanternPrice(await this.getLanternTypes(wall.templeId), dto.lanternType, dto.amount, members.length).name;
     const perPersonAmount = dto.amount / members.length;
 
     let savedClaims: LanternClaim[];
@@ -308,6 +332,7 @@ export class LanternService {
             memberId: members[i].id,
             walkInName: null,
             wishText: null,
+            lanternType,
             amount: perPersonAmount.toFixed(2),
             createdByUserId: userId,
           });

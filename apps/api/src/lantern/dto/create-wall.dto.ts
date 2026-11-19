@@ -24,9 +24,11 @@ export class CreateWallDto {
   @Min(2000)
   year: number;
 
+  /** 已不再用來計價（改依燈種計價），保留欄位只為了相容舊資料；沒填就存 0 */
+  @IsOptional()
   @IsNumber()
   @IsPositive()
-  slotPrice: number;
+  slotPrice?: number;
 
   @IsOptional()
   @IsBoolean()

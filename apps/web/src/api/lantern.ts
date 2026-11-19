@@ -4,6 +4,7 @@ import {
   CreateLanternWallRequest,
   GenerateLanternSlotsRequest,
   LanternSlotDto,
+  LanternTypePrice,
   LanternWallDto,
   MemberHistoryEntryDto,
   ReceiptDto,
@@ -14,6 +15,12 @@ import { apiClient } from "./client";
 
 export async function listWalls(templeId?: string): Promise<LanternWallDto[]> {
   const res = await apiClient.get<LanternWallDto[]>("/lantern/walls", { params: templeId ? { templeId } : {} });
+  return res.data;
+}
+
+/** 點燈的燈種與價格：報名頁依燈種計價 */
+export async function getLanternTypes(templeId: string): Promise<LanternTypePrice[]> {
+  const res = await apiClient.get<LanternTypePrice[]>("/lantern/types", { params: { templeId } });
   return res.data;
 }
 

@@ -31,7 +31,6 @@ import {
   CeremonySession,
   PILGRIMAGE_BUS_SEAT_COUNT,
   GenerateLanternSlotsRequest,
-  LANTERN_TYPE_OPTIONS,
   LanternSlotDto,
   LanternSlotStatus,
   LanternWallDto,
@@ -52,6 +51,7 @@ import {
   deleteReceipt,
   deleteWall,
   generateSlots,
+  getLanternTypes,
   getWallSlots,
   listWalls,
   updateClaim,
@@ -71,7 +71,6 @@ import {
   buildSettlementHtml,
   openHtmlPrintWindow,
 } from "../utils/printReport";
-import { joinLanternType, splitLanternType } from "../utils/lanternType";
 
 type ActivityType = "ceremony" | "jigai" | "pilgrimage" | "lanternWall";
 
@@ -1108,11 +1107,13 @@ function EditClaimModal({
   slot,
   wallName,
   wallIsTaisuiWall,
+  wallTempleId,
   onClose,
 }: {
   slot: LanternSlotDto;
   wallName?: string;
   wallIsTaisuiWall?: boolean;
+  wallTempleId?: string;
   onClose: () => void;
 }) {
   const { message } = App.useApp();
@@ -1120,6 +1121,17 @@ function EditClaimModal({
   const [form] = Form.useForm();
   const claim = slot.claim!;
   const payerMode = Form.useWatch("payerMode", form) ?? (claim.memberId ? "member" : "walkIn");
+  // 金額已經開在收據上不能改，所以燈種只能換成價格相同的（目前這一種一定列在裡面）
+  const typesQuery = useQuery({
+    queryKey: ["lantern-types", wallTempleId],
+    queryFn: () => getLanternTypes(wallTempleId!),
+    enabled: !!wallTempleId,
+  });
+  const sameAmountTypes = (typesQuery.data ?? []).filter((t) => Math.round(t.price * 100) === Math.round(claim.amount * 100));
+  const typeOptions = [
+    ...(claim.lanternType && !sameAmountTypes.some((t) => t.name === claim.lanternType) ? [claim.lanternType] : []),
+    ...sameAmountTypes.map((t) => t.name),
+  ];
 
   const mutation = useMutation({
     mutationFn: (values: {
@@ -1150,7 +1162,7 @@ function EditClaimModal({
           walkInName: claim.memberId ? undefined : claim.memberName,
           wishText: claim.wishText ?? undefined,
           petitionText: claim.petitionText ?? undefined,
-          lanternType: wallIsTaisuiWall ? [TAISUI_LANTERN_TYPE] : splitLanternType(claim.lanternType),
+          lanternType: wallIsTaisuiWall ? TAISUI_LANTERN_TYPE : (claim.lanternType ?? undefined),
         }}
         onFinish={(values) =>
           mutation.mutate({
@@ -1158,7 +1170,7 @@ function EditClaimModal({
             walkInName: values.payerMode === "walkIn" ? values.walkInName : null,
             wishText: values.wishText || null,
             petitionText: values.petitionText || null,
-            lanternType: joinLanternType(values.lanternType),
+            lanternType: values.lanternType ?? null,
           })
         }
       >
@@ -1178,19 +1190,20 @@ function EditClaimModal({
           </Form.Item>
         )}
         <Form.Item
-          label="點燈內容"
+          label="點燈內容（燈種）"
           name="lanternType"
-          rules={[{ required: true, type: "array", min: 1, message: "請選擇點燈內容" }]}
-          extra={wallIsTaisuiWall ? "太歲燈牆固定點「太歲燈」，不開放更改" : "必選，可複選"}
+          rules={[{ required: true, message: "請選擇點燈內容" }]}
+          extra={
+            wallIsTaisuiWall
+              ? "太歲燈牆固定點「太歲燈」，不開放更改"
+              : `只能換成價格同為 NT$ ${claim.amount.toLocaleString()} 的燈種；價格不同請作廢收據後重新點燈`
+          }
         >
           <Select
-            mode="multiple"
             disabled={wallIsTaisuiWall}
-            options={(wallIsTaisuiWall ? [TAISUI_LANTERN_TYPE] : LANTERN_TYPE_OPTIONS).map((v) => ({
-              value: v,
-              label: v,
-            }))}
-            placeholder="例如：光明燈、平安燈"
+            loading={typesQuery.isLoading}
+            options={typeOptions.map((v) => ({ value: v, label: v }))}
+            placeholder="請選擇燈種"
           />
         </Form.Item>
         <Form.Item label="祈願內容" name="wishText">
@@ -1587,11 +1600,6 @@ function LanternWallListCard({
           },
           { title: "年度", dataIndex: "year" },
           {
-            title: "每盞燈價格",
-            dataIndex: "slotPrice",
-            render: (v: number) => `NT$ ${v.toLocaleString()}`,
-          },
-          {
             title: "點燈進度",
             render: (_: unknown, record: LanternWallDto) =>
               record.slotCount > 0 ? (
@@ -1694,9 +1702,6 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
           <Form.Item label="年度" name="year" rules={[{ required: true }]}>
             <InputNumber style={{ width: "100%" }} min={2000} />
           </Form.Item>
-          <Form.Item label="每盞燈價格" name="slotPrice" rules={[{ required: true }]}>
-            <InputNumber style={{ width: "100%" }} min={0} />
-          </Form.Item>
           <Form.Item name="isTaisuiWall" valuePropName="checked" initialValue={false}>
             <Checkbox>太歲燈牆（點燈內容將固定鎖定為「太歲燈」，不開放選擇其他點燈內容）</Checkbox>
           </Form.Item>
@@ -1732,7 +1737,6 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
               placeholder="請先建立或選擇燈牆"
               options={(wallsQuery.data ?? []).map((w) => ({ value: w.id, label: `${w.name}（${w.year}年）` }))}
             />
-            {wall && <Tag color="gold">每盞燈 NT$ {wall.slotPrice.toLocaleString()}</Tag>}
           </Space>
 
           {wallId && (
@@ -1800,6 +1804,7 @@ function CreateLanternWallSection({ templeId }: { templeId: string }) {
           slot={editingSlot}
           wallName={wall?.name}
           wallIsTaisuiWall={wall?.isTaisuiWall}
+          wallTempleId={templeId}
           onClose={() => setEditingSlot(null)}
         />
       )}

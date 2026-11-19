@@ -166,11 +166,11 @@ describe("先前發現問題的回歸測試與伺服器端把關", () => {
       await volunteer.post("/activities/submit", { pendingLanternClaims: [{ slotId: slot.id, walkInName: "甲", amount: 600, lanternType }] }).expect(400);
       expect((await volunteer.get(`/lantern/walls/${wall.id}/slots`).expect(200)).body[0].status).toBe("EMPTY");
 
-      const ok = await volunteer.post("/lantern/claims", { slotId: slot.id, walkInName: "甲", amount: 600, lanternType: "光明燈、平安燈" }).expect(201);
+      const ok = await volunteer.post("/lantern/claims", { slotId: slot.id, walkInName: "甲", amount: 600, lanternType: "光明燈" }).expect(201);
       const claimId = ok.body.slot.claim.id;
       const blank = await volunteer.patch(`/lantern/claims/${claimId}`, { lanternType }).catch(() => undefined);
       if (lanternType !== undefined) expect(blank?.status).toBe(400);
-      expect((await volunteer.get(`/lantern/walls/${wall.id}/slots`).expect(200)).body[0].claim.lanternType).toBe("光明燈、平安燈");
+      expect((await volunteer.get(`/lantern/walls/${wall.id}/slots`).expect(200)).body[0].claim.lanternType).toBe("光明燈");
     });
 
     it("有選信徒或有填姓名（前後空白不算）就可以", async () => {

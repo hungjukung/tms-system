@@ -740,7 +740,7 @@ describe("LanternService（白箱）", () => {
 
   describe("認領燈位的內部分支", () => {
     it("燈位或燈牆不存在 404；撞到唯一約束 409；其他錯誤原樣往外丟", async () => {
-      const dto = { slotId: "s1", walkInName: "甲", amount: 600 };
+      const dto = { slotId: "s1", walkInName: "甲", lanternType: "光明燈", amount: 600 };
       await expect(service.claimSlotForCombined(dto as never, "u1")).rejects.toThrow("找不到燈位");
       repos.slot.findOne.mockResolvedValue({ id: "s1", wallId: "w1", code: "A-01" });
       await expect(service.claimSlotForCombined(dto as never, "u1")).rejects.toThrow("找不到燈牆");
@@ -756,15 +756,15 @@ describe("LanternService（白箱）", () => {
     it("同時有信徒與臨櫃姓名時以信徒為準（臨櫃姓名不存）；年份用燈牆的年份；成功後廣播", async () => {
       repos.slot.findOne.mockResolvedValue({ id: "s1", wallId: "w1", code: "A-01" });
       repos.wall.findOne.mockResolvedValue({ id: "w1", year: 2030, templeId: "t1", name: "右牆" });
-      await service.claimSlotForCombined({ slotId: "s1", memberId: "m1", walkInName: "會被忽略", amount: 600.5 } as never, "u1");
-      expect(repos.claim.create).toHaveBeenCalledWith(expect.objectContaining({ year: 2030, memberId: "m1", walkInName: null, amount: "600.50" }));
+      await service.claimSlotForCombined({ slotId: "s1", memberId: "m1", walkInName: "會被忽略", lanternType: "光明燈", amount: 600 } as never, "u1");
+      expect(repos.claim.create).toHaveBeenCalledWith(expect.objectContaining({ year: 2030, memberId: "m1", walkInName: null, amount: "600.00" }));
       expect(gateway.broadcastSlotClaimed).toHaveBeenCalledTimes(1);
     });
 
     it("整戶點燈：燈位不屬於這面燈牆、或有燈位查不到 → 400", async () => {
       repos.wall.findOne.mockResolvedValue({ id: "w1", year: 2026, templeId: "t1" });
       household.findMembersByHouseholdId.mockResolvedValue([{ id: "m1", name: "甲" }, { id: "m2", name: "乙" }]);
-      const dto = { wallId: "w1", householdId: "h1", slotIds: ["s1", "s2"], amount: 1200 };
+      const dto = { wallId: "w1", householdId: "h1", slotIds: ["s1", "s2"], lanternType: "光明燈", amount: 1200 };
       repos.slot.find.mockResolvedValue([{ id: "s1", wallId: "w1" }]);
       await expect(service.claimSlotsForHouseholdCombined(dto, "u1")).rejects.toThrow("燈位不屬於此燈牆");
       repos.slot.find.mockResolvedValue([{ id: "s1", wallId: "w1" }, { id: "s2", wallId: "other" }]);

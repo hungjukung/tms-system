@@ -32,7 +32,6 @@ import {
   CreateGiftRequest,
   DonationType,
   GiftType,
-  LANTERN_TYPE_OPTIONS,
   LanternSlotDto,
   LanternSlotStatus,
   PILGRIMAGE_BUS_SEAT_COUNT,
@@ -46,7 +45,7 @@ import {
   TAISUI_LANTERN_TYPE,
   UserRole,
 } from "@tms/shared";
-import { deleteReceipt, getWallSlots, listWalls, voidReceipt } from "../api/lantern";
+import { deleteReceipt, getLanternTypes, getWallSlots, listWalls, voidReceipt } from "../api/lantern";
 import { checkDuplicateRegistrations, getCeremonySeats, listCeremonies } from "../api/ceremony";
 import { submitActivities } from "../api/activities";
 import { getHouseholdMembers } from "../api/households";
@@ -57,7 +56,6 @@ import { getReceiptDetails } from "../api/print";
 import { useAuth } from "../context/AuthContext";
 import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportReceiptCertificatePdf, exportRowsToExcel } from "../utils/export";
-import { joinLanternType } from "../utils/lanternType";
 import { lanternCellWidth } from "../utils/lanternCell";
 
 type ActivityKey = "lantern" | "donation" | "ceremony" | "gift";
@@ -1568,6 +1566,8 @@ function LanternSlotPickerModal({
   wallId,
   wallName,
   maxSelections,
+  freeMulti,
+  initialChosen,
   onSelect,
   onConfirmMultiple,
 }: {
@@ -1577,10 +1577,14 @@ function LanternSlotPickerModal({
   wallName: string;
   /** 提供此欄位時進入多選模式（整戶點燈：一次選好幾盞燈），需選滿此數量才能確認 */
   maxSelections?: number;
+  /** 不限數量的多選（單人一次點好幾盞燈）：至少選 1 個燈位就能確認 */
+  freeMulti?: boolean;
+  /** 已經選好的燈位：重新開啟選位視窗時帶回，不用重選 */
+  initialChosen?: LanternSlotDto[];
   onSelect?: (slot: LanternSlotDto) => void;
   onConfirmMultiple?: (slots: LanternSlotDto[]) => void;
 }) {
-  const isMulti = maxSelections != null;
+  const isMulti = maxSelections != null || !!freeMulti;
   const queryClient = useQueryClient();
   const [chosen, setChosen] = useState<LanternSlotDto[]>([]);
 
@@ -1591,7 +1595,8 @@ function LanternSlotPickerModal({
   });
 
   useEffect(() => {
-    if (!open) setChosen([]);
+    setChosen(open ? (initialChosen ?? []) : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // 即時同步：其他地點櫃台認領燈位時，立即更新本地畫面，避免多地點重複選同一顆燈位
@@ -1618,7 +1623,7 @@ function LanternSlotPickerModal({
     }
     setChosen((prev) => {
       if (prev.some((s) => s.id === slot.id)) return prev.filter((s) => s.id !== slot.id);
-      if (prev.length >= (maxSelections ?? 0)) return prev;
+      if (maxSelections != null && prev.length >= maxSelections) return prev;
       return [...prev, slot];
     });
   };
@@ -1639,17 +1644,22 @@ function LanternSlotPickerModal({
 
   return (
     <Modal
-      title={isMulti ? `選擇燈位：${wallName}（已選 ${chosen.length} / ${maxSelections}）` : `選擇燈位：${wallName}`}
+      title={
+        isMulti
+          ? `選擇燈位：${wallName}（已選 ${chosen.length}${maxSelections != null ? ` / ${maxSelections}` : " 個"}）`
+          : `選擇燈位：${wallName}`
+      }
       open={open}
       onCancel={onClose}
       footer={
         isMulti ? (
           <Button
             type="primary"
-            disabled={chosen.length !== maxSelections}
+            disabled={maxSelections != null ? chosen.length !== maxSelections : chosen.length === 0}
             onClick={() => onConfirmMultiple?.(chosen)}
           >
-            確認選位（{chosen.length} / {maxSelections}）
+            確認選位（{chosen.length}
+            {maxSelections != null ? ` / ${maxSelections}` : " 個"}）
           </Button>
         ) : null
       }
@@ -1707,6 +1717,9 @@ function LanternSlotPickerModal({
   );
 }
 
+/** 單人點燈時已選好的燈位：每個燈位各點一種燈 */
+type PickedLantern = { slotId: string; code: string; lanternType?: string; slot: LanternSlotDto };
+
 function LanternFields({
   templeId,
   pendingItems,
@@ -1723,8 +1736,10 @@ function LanternFields({
   const payerMode = Form.useWatch("payerMode", form) ?? "member";
   const wallId = Form.useWatch("wallId", form);
   const householdId = Form.useWatch("householdId", form);
-  const slotId = Form.useWatch("slotId", form);
-  const slotLabel = Form.useWatch("slotLabel", form);
+  // 單人點燈已選的燈位與各自的燈種：純粹是畫面狀態，不放進表單欄位
+  // （曾放在隱藏的 Input 欄位裡，結果選第二盞燈種時會把第一盞的值蓋掉）
+  const [picked, setPicked] = useState<PickedLantern[]>([]);
+  const householdLanternType = Form.useWatch("householdLanternType", form) as string | undefined;
   const householdSlotIds = Form.useWatch("householdSlotIds", form) as string[] | undefined;
   const householdSlotLabel = Form.useWatch("householdSlotLabel", form);
   const [slotModalOpen, setSlotModalOpen] = useState(false);
@@ -1732,6 +1747,14 @@ function LanternFields({
 
   const wallsQuery = useQuery({ queryKey: ["walls", templeId], queryFn: () => listWalls(templeId) });
   const wall = wallsQuery.data?.find((w) => w.id === wallId);
+  // 依燈種計價：燈種與價格由總幹事在「系統設定」維護
+  const typesQuery = useQuery({ queryKey: ["lantern-types", templeId], queryFn: () => getLanternTypes(templeId) });
+  const lanternTypes = typesQuery.data ?? [];
+  const priceOf = (name?: string) => lanternTypes.find((t) => t.name === name)?.price;
+  const typeOptions = (wall?.isTaisuiWall ? lanternTypes.filter((t) => t.name === TAISUI_LANTERN_TYPE) : lanternTypes).map((t) => ({
+    value: t.name,
+    label: `${t.name}　NT$ ${t.price.toLocaleString()}`,
+  }));
 
   useEffect(() => {
     if (!wallId && wallsQuery.data && wallsQuery.data.length > 0) {
@@ -1747,21 +1770,14 @@ function LanternFields({
   });
   const headcount = householdMembersQuery.data?.length ?? 0;
 
-  // 燈牆或整戶人數變動時，金額自動算成「單價」或「單價 x 人數」，仍可手動調整
+  // 換燈牆時，已選的燈位失效；太歲燈牆的燈種固定是「太歲燈」
   useEffect(() => {
-    if (!wall) return;
-    if (payerMode === "household") {
-      if (headcount > 0) form.setFieldValue("amount", wall.slotPrice * headcount);
-    } else {
-      form.setFieldValue("amount", wall.slotPrice);
-    }
-  }, [wall, payerMode, headcount, form]);
-
-  // 換燈牆時，太歲燈牆固定鎖定點燈內容為「太歲燈」；一般燈牆則清空選擇，改由使用者從下拉選單複選
-  useEffect(() => {
-    if (!wall) return;
-    form.setFieldValue("lanternType", wall.isTaisuiWall ? [TAISUI_LANTERN_TYPE] : []);
-  }, [wall, form]);
+    setPicked([]);
+    form.setFieldValue("householdSlotIds", undefined);
+    form.setFieldValue("householdSlotLabel", undefined);
+    form.setFieldValue("householdLanternType", wall?.isTaisuiWall ? TAISUI_LANTERN_TYPE : undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wallId]);
 
   // 換戶籍或換報名者類型時，已選的整戶燈位失效，一併清空
   useEffect(() => {
@@ -1770,57 +1786,76 @@ function LanternFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [householdId, payerMode]);
 
+  // 金額依燈種自動算出且鎖定：單人 = 各燈位燈種價格相加；整戶 = 燈種價格 × 戶內人數
+  const totalAmount =
+    payerMode === "household"
+      ? (priceOf(householdLanternType) ?? 0) * headcount
+      : picked.reduce((sum, p) => sum + (priceOf(p.lanternType) ?? 0), 0);
+  useEffect(() => {
+    form.setFieldValue("amount", totalAmount);
+  }, [totalAmount, form]);
+
   const canPickSlot = !!wallId && (payerMode === "household" ? headcount > 0 : true);
   const readyToAdd =
-    payerMode === "household" ? (householdSlotIds?.length ?? 0) === headcount && headcount > 0 : !!slotId;
+    payerMode === "household"
+      ? (householdSlotIds?.length ?? 0) === headcount && headcount > 0 && !!householdLanternType
+      : picked.length > 0 && picked.every((p) => !!p.lanternType);
 
   /**
    * 「加入」不會呼叫任何 API、不會建立資料庫紀錄，只是把這次點燈的內容暫存到本次收據的項目清單裡；
    * 真正的認領紀錄（含卡位）要到最後「送出並開立收據」才會建立，避免忘記送出時留下卡位卻沒收據的孤兒資料。
+   * 單人一次選好幾個燈位時，每個燈位各自是一個項目（各點一種燈、各一筆金額）。
    */
   const handleAdd = async () => {
     const values = await form.validateFields();
     if (payerMode === "household") {
+      const type = householdLanternType as string;
       const householdRequest: ClaimHouseholdLanternSlotsRequest = {
         wallId: values.wallId,
         householdId: values.householdId,
         slotIds: values.householdSlotIds,
-        amount: values.amount,
+        lanternType: type,
+        amount: totalAmount,
       };
       const names = householdMembersQuery.data?.map((m) => m.name).join("、") ?? "";
       onAddPending({
-        displayLabel: `${wall?.name ?? "點燈"}（整戶 ${names}${householdSlotLabel ? `　${householdSlotLabel}` : ""}）`,
-        amount: values.amount,
+        displayLabel: `${type}（整戶 ${names}${householdSlotLabel ? `　${householdSlotLabel}` : ""}）`,
+        amount: totalAmount,
         household: householdRequest,
       });
       message.success(`已為整戶 ${headcount} 人加入本次點燈項目`);
-      form.setFieldsValue({ wallId: undefined, householdSlotIds: undefined, householdSlotLabel: undefined });
-    } else {
-      const lanternType = joinLanternType(values.lanternType);
-      const singleRequest: ClaimLanternSlotRequest = {
-        slotId: values.slotId,
-        memberId: payerMode === "member" ? values.memberId : undefined,
-        walkInName: payerMode === "walkIn" ? values.walkInName : undefined,
-        wishText: values.wishText,
-        petitionText: values.petitionText,
-        lanternType: lanternType ?? undefined,
-        amount: values.amount,
-      };
-      const payerName = payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
-      onAddPending({
-        displayLabel: `${lanternType || wall?.name || "點燈"}（${payerName}${slotLabel ? `　${slotLabel}` : ""}）`,
-        amount: values.amount,
-        single: singleRequest,
+      form.setFieldsValue({
+        householdSlotIds: undefined,
+        householdSlotLabel: undefined,
+        householdLanternType: wall?.isTaisuiWall ? TAISUI_LANTERN_TYPE : undefined,
       });
-      message.success("已加入本次點燈項目");
+    } else {
+      const payerName = payerMode === "member" ? (selectedMemberName ?? "") : values.walkInName;
+      for (const p of picked) {
+        const price = priceOf(p.lanternType) ?? 0;
+        const singleRequest: ClaimLanternSlotRequest = {
+          slotId: p.slotId,
+          memberId: payerMode === "member" ? values.memberId : undefined,
+          walkInName: payerMode === "walkIn" ? values.walkInName : undefined,
+          wishText: values.wishText,
+          petitionText: values.petitionText,
+          lanternType: p.lanternType,
+          amount: price,
+        };
+        onAddPending({
+          displayLabel: `${p.lanternType}（${payerName}　${p.code}）`,
+          amount: price,
+          single: singleRequest,
+        });
+      }
+      message.success(picked.length > 1 ? `已加入 ${picked.length} 盞燈到本次點燈項目` : "已加入本次點燈項目");
       form.setFieldsValue({
         memberId: undefined,
         walkInName: undefined,
         wishText: undefined,
         petitionText: undefined,
-        slotId: undefined,
-        slotLabel: undefined,
       });
+      setPicked([]);
       setSelectedMemberName(undefined);
     }
   };
@@ -1829,6 +1864,9 @@ function LanternFields({
     onRemovePending(index);
     message.success("已從本次收據項目中移除");
   };
+
+  const setPickedType = (slotId: string, lanternType: string) =>
+    setPicked((current) => current.map((p) => (p.slotId === slotId ? { ...p, lanternType } : p)));
 
   return (
     <Card title="點燈">
@@ -1873,23 +1911,43 @@ function LanternFields({
             <Input />
           </Form.Item>
         )}
+        <Form.Item label="燈牆" name="wallId" rules={[{ required: true, message: "請選擇燈牆" }]}>
+          <Select
+            placeholder="尚無燈牆，請先新增"
+            options={(wallsQuery.data ?? []).map((w) => ({
+              value: w.id,
+              label: `${w.name}（${w.year}年）${w.isTaisuiWall ? "　太歲燈牆" : ""}`,
+            }))}
+          />
+        </Form.Item>
         {payerMode !== "household" && (
           <>
             <Form.Item
-              label="點燈內容"
-              name="lanternType"
-              rules={[{ required: true, type: "array", min: 1, message: "請選擇點燈內容" }]}
-              extra={wall?.isTaisuiWall ? "太歲燈牆固定點「太歲燈」，不開放更改" : "必選，可複選"}
+              label="燈位與燈種（一次可選多個燈位，每個燈位各點一種燈）"
+              required
+              extra="先選燈位，再替每個燈位選燈種；金額依燈種自動計算"
             >
-              <Select
-                mode="multiple"
-                disabled={wall?.isTaisuiWall}
-                options={(wall?.isTaisuiWall ? [TAISUI_LANTERN_TYPE] : LANTERN_TYPE_OPTIONS).map((v) => ({
-                  value: v,
-                  label: v,
-                }))}
-                placeholder="例如：光明燈、平安燈"
-              />
+              <Space direction="vertical" style={{ width: "100%" }}>
+                <Button disabled={!canPickSlot} onClick={() => setSlotModalOpen(true)}>
+                  {picked.length > 0 ? `重新選擇燈位（已選 ${picked.length} 個）` : "選擇燈位"}
+                </Button>
+                {picked.map((p) => (
+                  <Space key={p.slotId} align="center" wrap>
+                    <Tag color="green" style={{ fontSize: 16, padding: "4px 10px" }}>
+                      {p.code}
+                    </Tag>
+                    <Select
+                      style={{ width: 240 }}
+                      placeholder="請選擇燈種"
+                      loading={typesQuery.isLoading}
+                      value={p.lanternType}
+                      options={typeOptions}
+                      onChange={(value) => setPickedType(p.slotId, value)}
+                    />
+                    {p.lanternType && <Typography.Text type="secondary">NT$ {(priceOf(p.lanternType) ?? 0).toLocaleString()}</Typography.Text>}
+                  </Space>
+                ))}
+              </Space>
             </Form.Item>
             <Form.Item label="祈願內容" name="wishText">
               <Input.TextArea rows={2} placeholder="例如：闔家平安、事業順利" />
@@ -1899,51 +1957,49 @@ function LanternFields({
             </Form.Item>
           </>
         )}
-        <Form.Item label="燈牆" name="wallId" rules={[{ required: true, message: "請選擇燈牆" }]}>
-          <Select
-            placeholder="尚無燈牆，請先新增"
-            options={(wallsQuery.data ?? []).map((w) => ({
-              value: w.id,
-              label: `${w.name}（${w.year}年）　每盞 NT$ ${w.slotPrice.toLocaleString()}`,
-            }))}
-            onChange={() => {
-              form.setFieldValue("slotId", undefined);
-              form.setFieldValue("slotLabel", undefined);
-              form.setFieldValue("householdSlotIds", undefined);
-              form.setFieldValue("householdSlotLabel", undefined);
-            }}
-          />
-        </Form.Item>
-        <Form.Item label="金額" name="amount" rules={[{ required: true }]}>
-          <InputNumber style={{ width: "100%" }} min={0} />
-        </Form.Item>
-        <Form.Item name="slotId" hidden>
-          <Input />
-        </Form.Item>
-        <Form.Item name="slotLabel" hidden>
-          <Input />
+        {payerMode === "household" && (
+          <>
+            <Form.Item
+              label="燈種（整戶點同一種燈）"
+              name="householdLanternType"
+              rules={[{ required: true, message: "請選擇燈種" }]}
+              extra={wall?.isTaisuiWall ? "太歲燈牆固定點「太歲燈」，不開放更改" : undefined}
+            >
+              <Select
+                disabled={wall?.isTaisuiWall}
+                loading={typesQuery.isLoading}
+                options={typeOptions}
+                placeholder="請選擇燈種"
+              />
+            </Form.Item>
+            <Form.Item label="燈位" required>
+              <Space align="center" wrap>
+                <Button disabled={!canPickSlot} onClick={() => setSlotModalOpen(true)}>
+                  {householdSlotIds?.length ? "重新選擇燈位" : `選擇燈位（需選 ${headcount || "?"} 盞）`}
+                </Button>
+                {householdSlotLabel && <Tag color="green">已選 {householdSlotLabel}</Tag>}
+              </Space>
+            </Form.Item>
+          </>
+        )}
+        <Form.Item
+          label="金額（依燈種自動計算，不能修改）"
+          name="amount"
+          extra={
+            payerMode === "household"
+              ? `${householdLanternType ?? "燈種"}每盞 NT$ ${(priceOf(householdLanternType) ?? 0).toLocaleString()} × ${headcount || "?"} 人`
+              : picked.length > 0
+                ? picked.map((p) => `${p.code} ${p.lanternType ?? "（未選燈種）"} ${priceOf(p.lanternType) ?? 0}`).join("＋")
+                : undefined
+          }
+        >
+          <InputNumber style={{ width: "100%" }} min={0} disabled />
         </Form.Item>
         <Form.Item name="householdSlotIds" hidden>
           <Input />
         </Form.Item>
         <Form.Item name="householdSlotLabel" hidden>
           <Input />
-        </Form.Item>
-        <Form.Item label="燈位" required>
-          <Space align="center" wrap>
-            <Button disabled={!canPickSlot} onClick={() => setSlotModalOpen(true)}>
-              {payerMode === "household"
-                ? householdSlotIds?.length
-                  ? "重新選擇燈位"
-                  : `選擇燈位（需選 ${headcount || "?"} 盞）`
-                : slotId
-                  ? "重新選擇燈位"
-                  : "選擇燈位"}
-            </Button>
-            {payerMode === "household"
-              ? householdSlotLabel && <Tag color="green">已選 {householdSlotLabel}</Tag>
-              : slotLabel && <Tag color="green">已選 {slotLabel}</Tag>}
-          </Space>
         </Form.Item>
         <Button
           type="primary"
@@ -1965,27 +2021,29 @@ function LanternFields({
           wallId={wallId}
           wallName={wall?.name ?? ""}
           maxSelections={payerMode === "household" ? headcount : undefined}
-          onSelect={
-            payerMode === "household"
-              ? undefined
-              : (slot) => {
-                  form.setFieldValue("slotId", slot.id);
-                  form.setFieldValue("slotLabel", slot.code);
-                  setSlotModalOpen(false);
-                }
-          }
-          onConfirmMultiple={
-            payerMode === "household"
-              ? (slots) => {
-                  form.setFieldValue(
-                    "householdSlotIds",
-                    slots.map((s) => s.id),
-                  );
-                  form.setFieldValue("householdSlotLabel", slots.map((s) => s.code).join("、"));
-                  setSlotModalOpen(false);
-                }
-              : undefined
-          }
+          freeMulti={payerMode !== "household"}
+          onConfirmMultiple={(slots) => {
+            if (payerMode === "household") {
+              form.setFieldValue(
+                "householdSlotIds",
+                slots.map((s) => s.id),
+              );
+              form.setFieldValue("householdSlotLabel", slots.map((s) => s.code).join("、"));
+            } else {
+              // 保留已經選過燈種的燈位；太歲燈牆的燈種自動帶入「太歲燈」
+              const keep = new Map(picked.map((p) => [p.slotId, p.lanternType]));
+              setPicked(
+                slots.map((s) => ({
+                  slot: s,
+                  slotId: s.id,
+                  code: s.code,
+                  lanternType: keep.get(s.id) ?? (wall?.isTaisuiWall ? TAISUI_LANTERN_TYPE : undefined),
+                })),
+              );
+            }
+            setSlotModalOpen(false);
+          }}
+          initialChosen={payerMode === "household" ? undefined : picked.map((p) => p.slot)}
         />
       )}
 

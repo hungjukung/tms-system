@@ -24,10 +24,20 @@ export enum LanternSlotStatus {
   CLAIMED = "CLAIMED", // 已認領（紅）
 }
 
-/** 「點燈內容」下拉式選單可複選的固定選項；太歲燈牆固定鎖定為 TAISUI_LANTERN_TYPE，不受此清單限制 */
-export const LANTERN_TYPE_OPTIONS = ["光明燈", "平安燈", "財利燈", "文昌燈"];
+/**
+ * 點燈改成依「燈種」計價（不再依燈牆）：每個燈位點一種燈，金額 = 該燈種的價格。
+ * 這是預設的燈種與價格；總幹事可以在「系統設定」修改，修改後存在各廟宇的設定裡。
+ */
+export const DEFAULT_LANTERN_TYPES: { name: string; price: number }[] = [
+  { name: "平安燈(大)", price: 5000 },
+  { name: "平安燈(中)", price: 3000 },
+  { name: "平安燈", price: 1000 },
+  { name: "發財燈", price: 600 },
+  { name: "光明燈", price: 600 },
+  { name: "太歲燈", price: 500 },
+];
 
-/** 太歲燈牆（isTaisuiWall）唯一可選的點燈內容 */
+/** 太歲燈牆（isTaisuiWall）唯一可選的點燈內容；燈種清單一定要保留這一項 */
 export const TAISUI_LANTERN_TYPE = "太歲燈";
 
 export enum DonationType {

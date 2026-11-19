@@ -117,9 +117,9 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
     it("燈牆列表統計燈位數、已點燈數與金額", async () => {
       const { wall, slots } = await createWallWithSlots(3);
       await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "甲", amount: 600 }).expect(201);
-      await volunteer.post("/lantern/claims", { slotId: slots[1].id, lanternType: "光明燈", walkInName: "乙", amount: 800 }).expect(201);
+      await volunteer.post("/lantern/claims", { slotId: slots[1].id, lanternType: "平安燈", walkInName: "乙", amount: 1000 }).expect(201);
       const [listed] = (await volunteer.get(`/lantern/walls?templeId=${fx.templeId}`).expect(200)).body;
-      expect(listed).toMatchObject({ id: wall.id, slotCount: 3, claimedCount: 2, totalAmount: 1400 });
+      expect(listed).toMatchObject({ id: wall.id, slotCount: 3, claimedCount: 2, totalAmount: 1600 });
     });
 
     it("刪除燈牆：已有人點燈先 409，force 才刪", async () => {
@@ -141,6 +141,173 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
   });
 
   // ───────────────────────────── 點燈 ─────────────────────────────
+  // ───────────────────────────── 燈種計價 ─────────────────────────────
+  describe("燈種計價（不再依燈牆計價）", () => {
+    const claim = (slotId: string, lanternType: string | undefined, amount: number, client = volunteer) =>
+      client.post("/lantern/claims", { slotId, lanternType, walkInName: "甲", amount });
+    const DEFAULTS: [string, number][] = [
+      ["平安燈(大)", 5000],
+      ["平安燈(中)", 3000],
+      ["平安燈", 1000],
+      ["發財燈", 600],
+      ["光明燈", 600],
+      ["太歲燈", 500],
+    ];
+
+    it("沒設定過時使用預設的 6 種燈種與價格；報名櫃檯人員也讀得到", async () => {
+      const read = async (client = volunteer) => (await client.get(`/lantern/types?templeId=${fx.templeId}`).expect(200)).body;
+      expect((await read()).map((t: { name: string; price: number }) => [t.name, t.price])).toEqual(DEFAULTS);
+      expect(await read(api(app, fx.tokens[UserRole.REGISTRAR]))).toHaveLength(6);
+      await volunteer.get(`/lantern/types?templeId=${GHOST_ID}`).expect(404);
+    });
+
+    it.each(DEFAULTS)("%s 一盞 %d 元：金額剛好才收，多一元少一元都 400，燈位不會被佔用", async (type, price) => {
+      const { wall, slots } = await createWallWithSlots(1);
+      for (const wrong of [price - 1, price + 1, 0]) {
+        const res = await claim(slots[0].id, type, wrong).expect(400);
+        expect(res.body.message).toBe(`${type}每盞 NT$ ${price}，金額不正確`);
+      }
+      expect((await slotsOf(wall.id))[0].status).toBe("EMPTY");
+      await claim(slots[0].id, type, price).expect(201);
+    });
+
+    it("燈種必須是清單裡的單一一種：不存在、複選（舊的「、」格式）都 400", async () => {
+      const { slots } = await createWallWithSlots(1);
+      expect((await claim(slots[0].id, "豪華燈", 600).expect(400)).body.message).toBe("找不到燈種「豪華燈」，請重新選擇");
+      await claim(slots[0].id, "光明燈、發財燈", 1200).expect(400);
+    });
+
+    it("燈牆的價格不再影響收費：同一面燈牆可以點不同價格的燈", async () => {
+      const { slots } = await createWallWithSlots(3); // 燈牆單價 600
+      await claim(slots[0].id, "平安燈(大)", 5000).expect(201);
+      await claim(slots[1].id, "太歲燈", 500).expect(201);
+      await claim(slots[2].id, "光明燈", 600).expect(201);
+      const receipts = (await volunteer.get("/lantern/receipts").expect(200)).body;
+      expect(receipts.items.map((r: { amount: number }) => r.amount).sort((a: number, b: number) => a - b)).toEqual([500, 600, 5000]);
+    });
+
+    it("燈牆可以不填單價（不再使用）", async () => {
+      const wall = (await director.post("/lantern/walls", { templeId: fx.templeId, name: "新牆", year: 2026 }).expect(201)).body;
+      expect(wall.slotPrice).toBe(0);
+    });
+
+    it("一次選多個燈位、每個燈位各點一種燈，合併成一張收據，金額是各燈種價格相加", async () => {
+      const { slots } = await createWallWithSlots(3);
+      const res = await volunteer
+        .post("/activities/submit", {
+          pendingLanternClaims: [
+            { slotId: slots[0].id, lanternType: "平安燈(大)", walkInName: "王小明", amount: 5000 },
+            { slotId: slots[1].id, lanternType: "光明燈", walkInName: "王小明", amount: 600 },
+            { slotId: slots[2].id, lanternType: "太歲燈", walkInName: "王小明", amount: 500 },
+          ],
+        })
+        .expect(201);
+      expect(res.body.receipt.amount).toBe(6100);
+      expect(res.body.receipt.items.map((i: { description: string; amount: number; note: string }) => [i.description, i.amount, i.note])).toEqual([
+        ["平安燈(大)", 5000, "燈位：A-01"],
+        ["光明燈", 600, "燈位：A-02"],
+        ["太歲燈", 500, "燈位：A-03"],
+      ]);
+    });
+
+    it("其中一盞金額不對：整張都不成立，前面已卡位的燈位全部放掉", async () => {
+      const { wall, slots } = await createWallWithSlots(2);
+      await volunteer
+        .post("/activities/submit", {
+          pendingLanternClaims: [
+            { slotId: slots[0].id, lanternType: "光明燈", walkInName: "甲", amount: 600 },
+            { slotId: slots[1].id, lanternType: "平安燈", walkInName: "甲", amount: 600 },
+          ],
+        })
+        .expect(400);
+      expect((await slotsOf(wall.id)).map((s) => s.status)).toEqual(["EMPTY", "EMPTY"]);
+      expect((await volunteer.get("/lantern/receipts").expect(200)).body.total).toBe(0);
+    });
+
+    it("整戶點燈：同一種燈，金額 = 燈種價格 × 戶內人數，每筆認領都記上燈種", async () => {
+      const { wall, slots } = await createWallWithSlots(2);
+      const a = await createMember(app, fx.tokens[UserRole.VOLUNTEER], "陳一", "陳家");
+      await createMember(app, fx.tokens[UserRole.VOLUNTEER], "陳二", "陳家");
+      const base = { wallId: wall.id, householdId: a.householdId, slotIds: [slots[0].id, slots[1].id] };
+      const submit = (body: Record<string, unknown>) =>
+        volunteer.post("/activities/submit", { pendingHouseholdLanternClaims: [{ ...base, ...body }] });
+
+      expect((await submit({ lanternType: "平安燈", amount: 1000 }).expect(400)).body.message).toBe("平安燈每盞 NT$ 1000，2 盞應收 NT$ 2000");
+      await submit({ lanternType: "豪華燈", amount: 2000 }).expect(400);
+      await submit({ amount: 2000 }).expect(400); // 沒選燈種
+      const ok = await submit({ lanternType: "平安燈", amount: 2000 }).expect(201);
+      expect(ok.body.receipt.amount).toBe(2000);
+      expect((await slotsOf(wall.id)).map((s) => s.claim?.lanternType)).toEqual(["平安燈", "平安燈"]);
+    });
+
+    describe("總幹事在系統設定修改燈種與價格", () => {
+      const putTypes = (lanternTypes: unknown, client = director) => client.put(`/settings/${fx.templeId}`, { lanternTypes });
+      const types = [
+        { name: "平安燈(大)", price: 6000 },
+        { name: "發財燈", price: 700 },
+        { name: "太歲燈", price: 500 },
+        { name: "文昌燈", price: 800 },
+      ];
+
+      it("改了之後新的價格和新增的燈種立刻生效；舊價格不再接受；設定頁讀得到", async () => {
+        const saved = (await putTypes(types).expect(200)).body;
+        expect(saved.lanternTypes).toEqual(types);
+        expect((await director.get(`/settings/${fx.templeId}`).expect(200)).body.lanternTypes).toEqual(types);
+        expect((await volunteer.get(`/lantern/types?templeId=${fx.templeId}`).expect(200)).body).toEqual(types);
+
+        const { slots } = await createWallWithSlots(3);
+        await claim(slots[0].id, "平安燈(大)", 5000).expect(400); // 舊價格
+        await claim(slots[0].id, "平安燈(大)", 6000).expect(201);
+        await claim(slots[1].id, "文昌燈", 800).expect(201); // 新增的燈種
+        await claim(slots[2].id, "光明燈", 600).expect(400); // 已經被拿掉的燈種
+      });
+
+      it("不是總幹事不能改；其他設定欄位沒送時燈種不變", async () => {
+        for (const role of [UserRole.VOLUNTEER, UserRole.FINANCE, UserRole.REGISTRAR]) {
+          await putTypes(types, api(app, fx.tokens[role])).expect(403);
+        }
+        await director.put(`/settings/${fx.templeId}`, { templeName: "新名稱" }).expect(200);
+        expect((await volunteer.get(`/lantern/types?templeId=${fx.templeId}`).expect(200)).body).toHaveLength(6);
+      });
+
+      it.each([
+        ["空清單", [], "請至少設定一種燈種"],
+        ["名稱空白", [{ name: "  ", price: 1 }, { name: "太歲燈", price: 500 }], "燈種名稱不可空白"],
+        ["名稱重複", [{ name: "太歲燈", price: 1 }, { name: " 太歲燈 ", price: 2 }], "燈種名稱不可重複"],
+        ["名稱含「、」", [{ name: "甲、乙", price: 1 }, { name: "太歲燈", price: 500 }], "燈種名稱不可包含「、」"],
+        ["沒有保留太歲燈", [{ name: "光明燈", price: 600 }], "燈種一定要保留「太歲燈」（太歲燈牆固定點這一種）"],
+      ])("%s → 400", async (_label, body, message) => {
+        expect((await putTypes(body).expect(400)).body.message).toBe(message);
+      });
+
+      it.each([
+        ["價格為負", [{ name: "太歲燈", price: -1 }]],
+        ["價格不是數字", [{ name: "太歲燈", price: "很貴" }]],
+        ["名稱超過 20 字", [{ name: "太歲燈", price: 1 }, { name: "燈".repeat(21), price: 1 }]],
+        ["不是陣列", "太歲燈"],
+      ])("%s → 400（格式驗證）", async (_label, body) => {
+        await putTypes(body).expect(400);
+      });
+
+      it("價格可以是 0 或小數（以分計算，不會因浮點誤差失敗）", async () => {
+        await putTypes([{ name: "太歲燈", price: 0.1 }, { name: "結緣燈", price: 0 }]).expect(200);
+        const { slots } = await createWallWithSlots(2);
+        await claim(slots[0].id, "太歲燈", 0.1).expect(201);
+        await claim(slots[1].id, "結緣燈", 0).expect(201);
+      });
+    });
+
+    it("修改已點燈的燈種：只能換成價格相同的燈種（金額已開在收據上）", async () => {
+      const { slots } = await createWallWithSlots(1);
+      const claimed = (await claim(slots[0].id, "光明燈", 600).expect(201)).body.slot.claim;
+      const edit = (lanternType: string) => volunteer.patch(`/lantern/claims/${claimed.id}`, { lanternType });
+      expect((await edit("平安燈").expect(400)).body.message).toBe("平安燈每盞 NT$ 1000，與已收的 NT$ 600 不同，請作廢收據後重新點燈");
+      expect((await edit("豪華燈").expect(400)).body.message).toBe("找不到燈種「豪華燈」，請重新選擇");
+      expect((await edit("發財燈").expect(200)).body.claim.lanternType).toBe("發財燈");
+      await edit("發財燈").expect(200); // 沒有變更
+    });
+  });
+
   describe("點燈認領", () => {
     it("認領燈位：燈位變成已認領，同時開立收據", async () => {
       const { wall, slots } = await createWallWithSlots(2);
@@ -184,9 +351,9 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
       const { wall, slots } = await createWallWithSlots(1);
       const claimed = await volunteer.post("/lantern/claims", { slotId: slots[0].id, lanternType: "光明燈", walkInName: "打錯字", amount: 600 }).expect(201);
       const res = await volunteer
-        .patch(`/lantern/claims/${claimed.body.slot.claim.id}`, { walkInName: "王小明", lanternType: "平安燈" })
+        .patch(`/lantern/claims/${claimed.body.slot.claim.id}`, { walkInName: "王小明", lanternType: "發財燈" })
         .expect(200);
-      expect(res.body.claim).toMatchObject({ memberName: "王小明", lanternType: "平安燈" });
+      expect(res.body.claim).toMatchObject({ memberName: "王小明", lanternType: "發財燈" });
       expect((await slotsOf(wall.id))[0].claim).toMatchObject({ memberName: "王小明" });
       await volunteer.patch(`/lantern/claims/${GHOST_ID}`, { walkInName: "x" }).expect(404);
     });
@@ -250,7 +417,7 @@ describe("點燈、捐款與收據（黑箱／HTTP API）", () => {
       const token = fx.tokens[UserRole.VOLUNTEER];
       const a = await createMember(app, token, "陳一", "陳家");
       await createMember(app, token, "陳二", "陳家");
-      const base = { wallId: wall.id, householdId: a.householdId, amount: 1200 };
+      const base = { wallId: wall.id, householdId: a.householdId, lanternType: "光明燈", amount: 1200 };
 
       await volunteer.post("/activities/submit", { pendingHouseholdLanternClaims: [{ ...base, slotIds: [slots[0].id] }] }).expect(400);
 

@@ -22,7 +22,7 @@ export class ClaimSlotDto {
   @IsString()
   petitionText?: string;
 
-  /** 點燈內容（例如「光明燈」「平安燈」，複選以「、」合併）：必填，不可為空白 */
+  /** 點燈內容（燈種，例如「光明燈」「平安燈(大)」）：必填，必須是系統設定裡的其中一種；金額等於該燈種價格 */
   @IsString()
   @Matches(/\S/, { message: "點燈內容不可為空" })
   @MaxLength(100)

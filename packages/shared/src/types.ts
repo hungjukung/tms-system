@@ -266,6 +266,8 @@ export interface ClaimHouseholdLanternSlotsRequest {
   wallId: string;
   householdId: string;
   slotIds: string[];
+  /** 整戶點同一種燈：燈種（系統設定裡的其中一種），金額 = 燈種價格 × 戶內人數 */
+  lanternType: string;
   amount: number;
 }
 
@@ -747,9 +749,17 @@ export interface TempleDto {
   name: string;
 }
 
+/** 燈種與價格：點燈時依燈種計價，每個燈位點一種燈 */
+export interface LanternTypePrice {
+  name: string;
+  price: number;
+}
+
 export interface TempleSettingsDto {
   id: string;
   name: string;
+  /** 點燈的燈種與價格（沒設定過時回傳預設清單） */
+  lanternTypes: LanternTypePrice[];
   templeName: string;
   address: string | null;
   phone: string | null;
@@ -764,6 +774,7 @@ export interface TempleSettingsDto {
 
 export interface UpdateTempleSettingsRequest {
   name?: string;
+  lanternTypes?: LanternTypePrice[];
   templeName?: string;
   address?: string;
   phone?: string;
