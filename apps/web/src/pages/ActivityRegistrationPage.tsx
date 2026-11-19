@@ -2304,9 +2304,11 @@ export function ActivityRegistrationPage() {
         <>
           <Card>
             <Space direction="vertical" style={{ width: "100%" }}>
-              <Checkbox checked={multi} onChange={(e) => setMulti(e.target.checked)}>
-                多人報名
-              </Checkbox>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <Checkbox checked={multi} onChange={(e) => setMulti(e.target.checked)}>
+                  多人報名
+                </Checkbox>
+              </div>
               {multi ? (
                 <Typography.Text type="secondary">已勾選多人報名：各項目分別選擇或輸入報名者</Typography.Text>
               ) : (

@@ -13,6 +13,8 @@ interface Props {
 
 export function MemberSelect({ value, onChange, onSelectMember, style }: Props) {
   const [keyword, setKeyword] = useState("");
+  // 選定後 antd 會清掉搜尋字，搜尋結果跟著消失；記住已選的那一位，否則欄位會只剩一串 id
+  const [chosen, setChosen] = useState<{ value: string; label: string; name: string } | undefined>();
   const query = useQuery({
     queryKey: ["member-select", keyword],
     queryFn: () => searchMembers(keyword, 1, 20),
@@ -28,6 +30,8 @@ export function MemberSelect({ value, onChange, onSelectMember, style }: Props) 
       })),
     [query.data],
   );
+  const shownOptions =
+    value && chosen?.value === value && !options.some((o) => o.value === value) ? [chosen, ...options] : options;
 
   return (
     <Select
@@ -39,12 +43,14 @@ export function MemberSelect({ value, onChange, onSelectMember, style }: Props) 
       onSearch={setKeyword}
       onChange={(val, option) => {
         onChange?.(val);
+        const picked = Array.isArray(option) ? option[0] : option;
+        setChosen(val && picked ? { value: val, label: (picked as { label: string }).label, name: (picked as { name: string }).name } : undefined);
         if (!onSelectMember) return;
         const opt = Array.isArray(option) ? option[0] : option;
         onSelectMember(val && opt ? { id: val, name: (opt as { name: string }).name } : undefined);
       }}
       notFoundContent={query.isFetching ? <Spin size="small" /> : "查無資料"}
-      options={options}
+      options={shownOptions}
     />
   );
 }
