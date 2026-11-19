@@ -64,6 +64,7 @@ import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportRowsToExcel, exportSheetsToExcel } from "../utils/export";
 import { buildPilgrimageWorkbook } from "../utils/pilgrimageReport";
 import { exportLanternWallExcel } from "../utils/lanternWallExcel";
+import { SHOW_PILGRIMAGE_BUS } from "../utils/features";
 import {
   buildBusRosterHtml,
   buildParticipantRosterHtml,
@@ -96,9 +97,9 @@ function registrationSeatText(r: CeremonyRegistrationDto, kind: CeremonyKind): s
   }
   if (r.roomType) {
     const room = r.roomNumber != null ? `${r.roomType} 第${r.roomNumber}間` : r.roomType;
-    return r.busNumber != null ? `第${r.busNumber}車 ${room}` : room;
+    return SHOW_PILGRIMAGE_BUS && r.busNumber != null ? `第${r.busNumber}車 ${room}` : room;
   }
-  if (kind === CeremonyKind.PILGRIMAGE && r.busNumber != null) return `第${r.busNumber}車`;
+  if (SHOW_PILGRIMAGE_BUS && kind === CeremonyKind.PILGRIMAGE && r.busNumber != null) return `第${r.busNumber}車`;
   if (!r.seatNumber) return "-";
   if (kind === CeremonyKind.PILGRIMAGE) {
     const [row, seat] = r.seatNumber.split("-");
@@ -232,7 +233,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
         </Form.Item>
         {isPilgrimage ? (
           <>
-            <BusCountField />
+            {SHOW_PILGRIMAGE_BUS && <BusCountField />}
             <RoomTypesField />
           </>
         ) : (
@@ -273,7 +274,7 @@ function CreateCeremonyForm({ templeId, kind = CeremonyKind.GENERAL }: { templeI
           <Alert
             type="info"
             style={{ marginBottom: 16 }}
-            message="報名時選房型並登錄參加者（人數不可超過該房型每間人數），系統依序分配第幾間；房型訂滿或遊覽車坐滿後就不能再報名"
+            message="報名時選房型，系統依序分配第幾間；房型訂滿就不能再報名"
           />
         ) : (
           <Space.Compact block>
@@ -351,7 +352,7 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
             name: values.name,
             date: (values.date as Dayjs).format("YYYY-MM-DD"),
             ...(isPilgrimage
-              ? { roomTypes: values.roomTypes ?? [], busCount: values.busCount }
+              ? { roomTypes: values.roomTypes ?? [], ...(SHOW_PILGRIMAGE_BUS ? { busCount: values.busCount } : {}) }
               : {
                   feeMode: values.feeMode,
                   fixedAmount: values.feeMode === CeremonyFeeMode.FIXED_AMOUNT ? values.fixedAmount : null,
@@ -382,10 +383,12 @@ function EditCeremonyModal({ ceremony, onClose }: { ceremony: CeremonyDto; onClo
         </Form.Item>
         {isPilgrimage ? (
           <>
-            <BusCountField
-              min={Math.max(1, ...(ceremony.busLoads ?? []).map((n, i) => (n > 0 ? i + 1 : 0)))}
-              registered={ceremony.registrationCount}
-            />
+            {SHOW_PILGRIMAGE_BUS && (
+              <BusCountField
+                min={Math.max(1, ...(ceremony.busLoads ?? []).map((n, i) => (n > 0 ? i + 1 : 0)))}
+                registered={ceremony.registrationCount}
+              />
+            )}
             <RoomTypesField />
             {hasRegistrations && (
               <Alert
@@ -553,7 +556,7 @@ function CeremonyListCard({ templeId }: { templeId: string }) {
                 </Space>
               ) : record.kind === CeremonyKind.PILGRIMAGE ? (
                 <Space direction="vertical" size={2}>
-                  {record.busCapacity != null && (
+                  {SHOW_PILGRIMAGE_BUS && record.busCapacity != null && (
                     <Tag color={record.registrationCount >= record.busCapacity ? "red" : "green"}>
                       遊覽車 {record.registrationCount}/{record.busCapacity} 人
                       {record.busLoads && record.busLoads.length > 1
@@ -669,7 +672,7 @@ function MovePilgrimageModal({
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const currentRoom = ceremony.roomTypes?.find((r) => r.name === registration.roomType);
-  const busCount = ceremony.busCount ?? 0;
+  const busCount = SHOW_PILGRIMAGE_BUS ? (ceremony.busCount ?? 0) : 0;
 
   const mutation = useMutation({
     mutationFn: (values: { roomType?: string; busNumber?: number }) => movePilgrimageBooking(registration.id, values),
@@ -870,7 +873,7 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
               {ceremony.description}
             </Descriptions.Item>
           )}
-          {isPilgrimage && ceremony.busCapacity != null && (
+          {SHOW_PILGRIMAGE_BUS && isPilgrimage && ceremony.busCapacity != null && (
             <Descriptions.Item label="遊覽車" span={2}>
               已報名 {ceremony.registrationCount} / {ceremony.busCapacity} 人（{ceremony.busCount} 台 × {PILGRIMAGE_BUS_SEAT_COUNT} 座
               {ceremony.busLoads && ceremony.busLoads.length > 1
@@ -908,9 +911,11 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
           )}
           {isPilgrimage ? (
             <>
-              <Button onClick={() => printReport(buildBusRosterHtml)} disabled={!reportQuery.data}>
-                列印車次名單
-              </Button>
+              {SHOW_PILGRIMAGE_BUS && (
+                <Button onClick={() => printReport(buildBusRosterHtml)} disabled={!reportQuery.data}>
+                  列印車次名單
+                </Button>
+              )}
               <Button onClick={() => printReport(buildRoomRosterHtml)} disabled={!reportQuery.data}>
                 列印房型名單
               </Button>
@@ -999,7 +1004,7 @@ function CeremonyDetailModal({ ceremony, onClose }: { ceremony: CeremonyDto; onC
                       <Button size="small" onClick={() => openPrintWindow(`/print/receipt/${record.receiptId}`)}>
                         補印
                       </Button>
-                      {isPilgrimage && canMoveBooking && (record.roomType || (ceremony.busCount ?? 0) > 1) && (
+                      {isPilgrimage && canMoveBooking && (record.roomType || (SHOW_PILGRIMAGE_BUS && (ceremony.busCount ?? 0) > 1)) && (
                         <Button size="small" onClick={() => setMovingRegistration(record)}>
                           調整房型／車次
                         </Button>

@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import { CeremonyRegistrationDto, CeremonyReportDto, GiftType } from "@tms/shared";
+import { SHOW_PILGRIMAGE_BUS } from "./features";
 
 export type SheetRows = (string | number)[][];
 export interface ReportSheet {
@@ -153,5 +154,10 @@ function giftSheet(report: CeremonyReportDto): ReportSheet {
 
 /** 進香總表（一個 Excel 四個工作表）：房型名單、車次名單、收入支出總表、收禮資訊 */
 export function buildPilgrimageWorkbook(report: CeremonyReportDto): ReportSheet[] {
-  return [roomRosterSheet(report), busRosterSheet(report), summarySheet(report), giftSheet(report)];
+  return [
+    roomRosterSheet(report),
+    ...(SHOW_PILGRIMAGE_BUS ? [busRosterSheet(report)] : []),
+    summarySheet(report),
+    giftSheet(report),
+  ];
 }

@@ -87,9 +87,6 @@ export class CeremonyService {
       throw new BadRequestException("祭改活動請設定上午場與下午場人數");
     }
     const isPilgrimage = dto.kind === CeremonyKind.PILGRIMAGE;
-    if (isPilgrimage && !dto.busCount) {
-      throw new BadRequestException("進香活動請設定遊覽車台數");
-    }
     if (isPilgrimage && !dto.roomTypes?.length) {
       throw new BadRequestException("進香活動請至少設定一種房型");
     }
@@ -588,9 +585,9 @@ export class CeremonyService {
    * 活動沒設台數（舊資料）時沒有車次。回傳車次或 null。
    */
   private resolveBusNumber(ceremony: Ceremony, dto: RegisterCeremonyDto): number | null {
-    if (!ceremony.busCount) return null;
-    const busNumber = dto.busNumber ?? (ceremony.busCount === 1 ? 1 : undefined);
-    if (busNumber == null) throw new BadRequestException("請選擇車次");
+    // 車次是選填：進香目前不需要車次，沒帶車次就不記、不檢查座位（功能保留，之後要用時前端再帶 busNumber）
+    if (!ceremony.busCount || dto.busNumber == null) return null;
+    const busNumber = dto.busNumber;
     if (!Number.isInteger(busNumber) || busNumber < 1 || busNumber > ceremony.busCount) {
       throw new BadRequestException(`車次超出範圍（共 ${ceremony.busCount} 台）`);
     }

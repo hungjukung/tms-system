@@ -56,6 +56,7 @@ import { getReceiptDetails } from "../api/print";
 import { useAuth } from "../context/AuthContext";
 import { ALL_TEMPLES, useTemple } from "../context/TempleContext";
 import { exportReceiptCertificatePdf, exportRowsToExcel } from "../utils/export";
+import { ALLOW_PILGRIMAGE_MULTI_PARTICIPANTS, SHOW_PILGRIMAGE_BUS } from "../utils/features";
 import { lanternCellWidth } from "../utils/lanternCell";
 
 type ActivityKey = "lantern" | "donation" | "ceremony" | "gift";
@@ -253,7 +254,7 @@ function DonationFields({
           <Select
             allowClear
             placeholder="不指定（計入一般捐款分類）"
-            options={ceremonies.map((c) => ({ value: c.id, label: `${c.name}（${c.date}）` }))}
+            options={ceremonies.map((c) => ({ value: c.id, label: c.name }))}
             className={ceremonyId ? "ceremony-selected-select" : undefined}
           />
         </Form.Item>
@@ -367,7 +368,7 @@ function GiftFields({
           <Select
             allowClear
             placeholder="不指定"
-            options={ceremonies.map((c) => ({ value: c.id, label: `${c.name}（${c.date}）` }))}
+            options={ceremonies.map((c) => ({ value: c.id, label: c.name }))}
           />
         </Form.Item>
         <Form.Item
@@ -888,7 +889,7 @@ function CeremonyRegistrationFields({
   const roomsLeftOf = (r: (typeof roomTypes)[number]) =>
     r.roomCount == null ? null : r.roomCount - r.roomsBooked - pendingRoomsOf(r.name);
   // 遊覽車車次：只有 1 台時自動是第 1 車，2 台以上由報名者選；每車固定 PILGRIMAGE_BUS_SEAT_COUNT 位
-  const busCount = isPilgrimage ? (selectedCeremony?.busCount ?? 0) : 0;
+  const busCount = SHOW_PILGRIMAGE_BUS && isPilgrimage ? (selectedCeremony?.busCount ?? 0) : 0;
   const hasBuses = busCount > 0;
   const multiBus = busCount > 1;
   const effectiveBus = hasBuses ? (busCount === 1 ? 1 : busNumberValue) : undefined;
@@ -1168,18 +1169,8 @@ function CeremonyRegistrationFields({
         <Form.Item label="選擇活動" name="ceremonyId" rules={[{ required: true }]}>
           <Select
             placeholder="請選擇活動"
-            options={ceremonies.map((c) => ({
-              value: c.id,
-              label: `${c.name}（${c.date}，${c.roomTypes?.length ? "依房型" : feeModeLabel[c.feeMode]}）${
-                c.kind === CeremonyKind.JIGAI
-                  ? `　上午 ${c.morningRegistered}/${c.morningCapacity}　下午 ${c.afternoonRegistered}/${c.afternoonCapacity}`
-                  : c.kind === CeremonyKind.PILGRIMAGE && c.busCapacity != null
-                    ? `　遊覽車 ${c.registrationCount}/${c.busCapacity} 人`
-                    : c.totalSeats
-                      ? `　座位 ${c.seatsAssigned}/${c.totalSeats}`
-                      : ""
-              }`,
-            }))}
+            // 選單只顯示活動名稱（日期、收費方式、名額都不顯示）
+            options={ceremonies.map((c) => ({ value: c.id, label: c.name }))}
             onChange={(value) => {
               const ceremony = ceremonies.find((c) => c.id === value);
               if (ceremony?.feeMode === CeremonyFeeMode.FIXED_AMOUNT && payerMode !== "household") {
@@ -1208,7 +1199,9 @@ function CeremonyRegistrationFields({
                 const left = roomsLeftOf(r);
                 return {
                   value: r.name,
-                  label: `${r.name}（每間最多 ${r.capacity} 人，每人 NT$ ${r.fee}${left != null ? `，剩 ${Math.max(left, 0)} 間` : ""}）`,
+                  label: ALLOW_PILGRIMAGE_MULTI_PARTICIPANTS
+                    ? `${r.name}（每間最多 ${r.capacity} 人，每人 NT$ ${r.fee}${left != null ? `，剩 ${Math.max(left, 0)} 間` : ""}）`
+                    : `${r.name}（NT$ ${r.fee}${left != null ? `，剩 ${Math.max(left, 0)} 間` : ""}）`,
                   disabled: left != null && left <= 0,
                 };
               })}
@@ -1325,7 +1318,7 @@ function CeremonyRegistrationFields({
                       </Card>
                     );
                   })}
-                  {selectedRoom && (
+                  {ALLOW_PILGRIMAGE_MULTI_PARTICIPANTS && selectedRoom && (
                     <Typography.Text type={overRoomCapacity ? "danger" : "secondary"}>
                       {selectedRoom.name}每間最多 {selectedRoom.capacity} 人，目前 {fields.length} 人
                       {overRoomCapacity ? "，請移除多出的參加者或改選較大的房型" : ""}
@@ -1336,7 +1329,7 @@ function CeremonyRegistrationFields({
                       第 {effectiveBus} 車座位不足，只剩 {Math.max(busSeatsLeft ?? 0, 0)} 位，請改選其他車次
                     </Typography.Text>
                   )}
-                  {(!selectedRoom || fields.length < selectedRoom.capacity) && (
+                  {ALLOW_PILGRIMAGE_MULTI_PARTICIPANTS && (!selectedRoom || fields.length < selectedRoom.capacity) && (
                     <Button type="dashed" block onClick={() => add({ mode: "member" })}>
                       ＋ 新增參加者
                     </Button>
