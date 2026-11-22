@@ -2264,7 +2264,11 @@ export function ActivityRegistrationPage() {
         message.warning(`請先完成${label}（點擊「加入本次${label}項目」）`);
         return;
       }
-      if (form.isFieldsTouched(["memberId", "walkInName", "amount", "giftTypes"])) {
+      // 只看使用者真的會在這個區塊填的欄位（捐款的金額、送禮的品項）。
+      // 報名者欄位是由最上方的報名者自動同步填入的（有的還是隱藏的），不能拿來判斷「還有沒加入的內容」，
+      // 否則每次加入一筆後同步一寫入，就會誤判而擋下送出
+      const unadded = key === "donation" ? form.getFieldValue("amount") != null : (form.getFieldValue("giftTypes")?.length ?? 0) > 0;
+      if (unadded) {
         message.warning(`${label}表單上還有填寫但沒有加入的內容，請點擊「加入本次${label}項目」，或清空後再送出`);
         return;
       }

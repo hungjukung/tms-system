@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { apiAs, loginWithTemple, radioButton } from "./helpers";
+import { apiAs, fillSharedWalkIn, loginWithTemple } from "./helpers";
 
 /**
  * 確認點燈表單選的是這面燈牆：頁面載入時預設選第一面燈牆，而測試資料庫裡可能有好幾面，
@@ -56,8 +56,9 @@ test("先選燈種再選燈牆與燈位：一次選 3 個燈位都先套用這�
   await page.locator(".ant-checkbox-wrapper", { hasText: "點燈" }).click();
   const card = page.locator(".ant-card").filter({ has: page.locator(".ant-card-head-title", { hasText: /^點燈$/ }) });
 
-  await radioButton(card, "臨櫃香客（免建檔）").click();
-  await card.getByLabel("姓名", { exact: true }).fill("龔忠欣");
+  // 報名者只在最上方填一次，點燈區塊沒有自己的報名者欄位
+  await fillSharedWalkIn(page, "龔忠欣");
+  await expect(card.getByLabel("姓名", { exact: true })).toBeHidden();
 
   // 欄位順序：燈種在燈牆之前
   const labels = await card.locator(".ant-form-item-label label").allInnerTexts();
@@ -119,8 +120,7 @@ test("太歲燈牆：燈種自動帶入且不能改，金額是太歲燈的價�
   await page.locator(".ant-menu").getByText("活動報名", { exact: true }).click();
   await page.locator(".ant-checkbox-wrapper", { hasText: "點燈" }).click();
   const card = page.locator(".ant-card").filter({ has: page.locator(".ant-card-head-title", { hasText: /^點燈$/ }) });
-  await radioButton(card, "臨櫃香客（免建檔）").click();
-  await card.getByLabel("姓名", { exact: true }).fill("甲");
+  await fillSharedWalkIn(page, "甲");
   await selectLanternType(page, "光明燈");
   // 選到太歲燈牆：燈種自動換成「太歲燈」並鎖定
   await selectWall(page, name);
@@ -174,8 +174,7 @@ test("總幹事在系統設定修改燈種價格：儲存後報名頁立刻用�
     await page.locator(".ant-menu").getByText("活動報名", { exact: true }).click();
     await page.locator(".ant-checkbox-wrapper", { hasText: "點燈" }).click();
     const lantern = page.locator(".ant-card").filter({ has: page.locator(".ant-card-head-title", { hasText: /^點燈$/ }) });
-    await radioButton(lantern, "臨櫃香客（免建檔）").click();
-    await lantern.getByLabel("姓名", { exact: true }).fill("甲");
+    await fillSharedWalkIn(page, "甲");
     // 新增的燈種出現在選單裡，價格是新價格
     await selectLanternType(page, "文昌燈");
     await selectWall(page, name);

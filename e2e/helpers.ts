@@ -54,3 +54,20 @@ export function futureDate(offsetDays = 30): string {
   d.setDate(d.getDate() + offsetDays);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
+
+/** 活動報名頁最上方的「報名者」卡片（沒勾選多人報名時，整張收據的報名者只在這裡填一次） */
+export function payerCard(page: Page) {
+  return page.locator(".ant-card").filter({ has: page.getByRole("checkbox", { name: "多人報名" }) });
+}
+
+/** 在最上方填臨櫃香客姓名：下面所有項目（點燈、捐款、活動報名、送禮）都沿用這個人 */
+export async function fillSharedWalkIn(page: Page, name: string) {
+  const card = payerCard(page);
+  await card.locator("label.ant-radio-button-wrapper", { hasText: "臨櫃香客" }).click();
+  await card.getByPlaceholder("報名者姓名").fill(name);
+}
+
+/** 勾選最上方的「多人報名」：各項目分別填寫報名者 */
+export async function checkMulti(page: Page) {
+  await payerCard(page).getByRole("checkbox", { name: "多人報名" }).check();
+}

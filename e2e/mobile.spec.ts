@@ -1,5 +1,5 @@
 import { expect, Page, test } from "@playwright/test";
-import { apiAs, futureDate, login, radioButton, selectOption } from "./helpers";
+import { apiAs, fillSharedWalkIn, futureDate, login, radioButton, selectOption } from "./helpers";
 
 /**
  * 手機尺寸（iPhone 13／14 一般大小，390×844）：志工常用手機或平板報名。
@@ -57,8 +57,7 @@ test.describe("手機版", () => {
     await loginWithTempleOnPhone(page, "volunteer");
     await page.locator(".ant-checkbox-wrapper", { hasText: "活動報名" }).click();
     await selectOption(page, "選擇活動", name);
-    await radioButton(page, "臨櫃香客（免建檔）").click();
-    await page.getByLabel("姓名", { exact: true }).fill("手機測試");
+    await fillSharedWalkIn(page, "手機測試");
     await page.getByRole("spinbutton", { name: "金額" }).fill("300");
     await expectNoHorizontalScroll(page);
 

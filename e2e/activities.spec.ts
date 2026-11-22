@@ -2,7 +2,7 @@ import { expect, Page, test } from "@playwright/test";
 import * as fs from "fs";
 // 讀匯出的 Excel 驗證內容：xlsx 裝在前端專案底下
 import * as XLSX from "../apps/web/node_modules/xlsx";
-import { apiAs, futureDate, loginWithTemple, radioButton, selectOption } from "./helpers";
+import { apiAs, checkMulti, fillSharedWalkIn, futureDate, loginWithTemple, payerCard, radioButton, selectOption } from "./helpers";
 
 /**
  * E2E：從建立活動到報名、開立收據的完整流程，全部用瀏覽器操作畫面完成，
@@ -53,8 +53,9 @@ test.describe("活動建立與報名", () => {
     // 2. 到「活動報名」頁替臨櫃香客報名上午場
     await openCeremonyRegistration(page, name);
     await radioButton(page, /上午場/).click();
-    await radioButton(page, "臨櫃香客（免建檔）").click();
-    await page.getByLabel("姓名", { exact: true }).fill("王小明");
+    // 報名者只在最上方填一次（沒勾選多人報名）：活動報名區塊不再有自己的報名者欄位
+    await fillSharedWalkIn(page, "王小明");
+    await expect(page.getByLabel("姓名", { exact: true })).toBeHidden();
     await page.getByRole("spinbutton", { name: "金額" }).fill("300");
     await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
     await expect(page.getByText(`${name}（王小明　上午場）`)).toBeVisible();
@@ -141,9 +142,9 @@ test.describe("活動建立與報名", () => {
     await expect(page.getByRole("button", { name: /新增參加者/ })).toHaveCount(0);
     await expect(radioButton(page, "整戶報名")).toHaveCount(0);
 
-    const participant = page.locator(".ant-card-small", { hasText: "參加者 1" });
-    await radioButton(participant, "臨櫃香客").click();
-    await participant.getByPlaceholder("姓名").fill("阿土伯");
+    // 進香沒勾選多人報名：參加者就是最上方的報名者，不會出現參加者卡片
+    await fillSharedWalkIn(page, "阿土伯");
+    await expect(page.locator(".ant-card-small", { hasText: "參加者 1" })).toBeHidden();
     await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
     await expect(page.getByText(`${name}（雙人房　阿土伯）`)).toBeVisible();
 
@@ -179,9 +180,7 @@ test.describe("活動建立與報名", () => {
     await expect(page.getByLabel("車次", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/遊覽車共|剩 \d+ 位/)).toHaveCount(0);
 
-    const participant = page.locator(".ant-card-small", { hasText: "參加者 1" });
-    await radioButton(participant, "臨櫃香客").click();
-    await participant.getByPlaceholder("姓名").fill("阿土伯");
+    await fillSharedWalkIn(page, "阿土伯");
     await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
     const receipt = await submitAndGetReceipt(page);
     await expect(receipt.locator("body")).toContainText("通鋪");
@@ -221,9 +220,7 @@ test.describe("活動建立與報名", () => {
     // 一次一人：金額就是四人房的每人費用，不能新增參加者
     await expect(page.getByRole("button", { name: /新增參加者/ })).toHaveCount(0);
     await expect(page.getByRole("spinbutton", { name: "金額" })).toHaveValue("5200");
-    const participant = page.locator(".ant-card-small", { hasText: "參加者 1" });
-    await radioButton(participant, "臨櫃香客").click();
-    await participant.getByPlaceholder("姓名").fill("甲");
+    await fillSharedWalkIn(page, "甲");
     await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
     await expect(page.getByText(`${name}（四人房　甲）`)).toBeVisible();
     const receipt = await submitAndGetReceipt(page);
@@ -259,6 +256,8 @@ test.describe("活動建立與報名", () => {
     const donationCard = card("捐款收費");
     const giftCard = card("送禮");
 
+    // 這張收據裡的捐款人和送禮人各不相同，所以要勾選「多人報名」，各區塊分別填報名者
+    await checkMulti(page);
     // 捐款兩筆：一般捐款、指定給進香活動
     await radioButton(donationCard, "臨櫃香客（免建檔）").click();
     await donationCard.getByLabel("姓名", { exact: true }).fill("王小明");
@@ -415,8 +414,7 @@ test.describe("活動建立與報名", () => {
     await loginWithTemple(page, "volunteer");
     await openCeremonyRegistration(page, name);
     const fillWalkIn = async () => {
-      await radioButton(page, "臨櫃香客（免建檔）").click();
-      await page.getByLabel("姓名", { exact: true }).fill("王小明");
+      await fillSharedWalkIn(page, "王小明");
       await page.getByRole("spinbutton", { name: "金額" }).fill("500");
       await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
     };
@@ -432,6 +430,104 @@ test.describe("活動建立與報名", () => {
     await expect(page.getByText(`${name}（王小明）`)).toBeVisible();
   });
 
+  test("多人報名沒勾選：報名者只填一次，點燈、捐款、活動報名、送禮都沿用，收據上是同一個人", async ({ page, request }) => {
+    const api = await apiAs(request, "director");
+    const name = `共用報名者-${Date.now()}`;
+    const ceremony = await api.post("/ceremony/ceremonies", { templeId: await api.templeId(), name, date: futureDate(), feeMode: "FREE_WILL" });
+
+    await loginWithTemple(page, "volunteer");
+    await page.locator(".ant-menu").getByText("活動報名", { exact: true }).click();
+    const options = ["捐款收費", "活動報名", "送禮"];
+    for (const option of options) await page.locator(".ant-checkbox-wrapper", { hasText: option }).click();
+
+    // 沒勾選多人報名：只有最上方一個報名者欄位，各區塊都沒有自己的姓名欄位
+    await expect(payerCard(page).getByRole("checkbox", { name: "多人報名" })).not.toBeChecked();
+    await expect(page.getByLabel("姓名", { exact: true })).toBeHidden();
+    await expect(page.getByText("香客類型")).toBeHidden();
+    await expect(page.getByText("捐贈者類型")).toBeHidden();
+
+    // 還沒填報名者就加入：被擋下並提示
+    await page.getByRole("button", { name: "加入本次捐款項目" }).click();
+    await expect(page.getByText("請先在最上方選擇報名者")).toBeVisible();
+
+    await fillSharedWalkIn(page, "共用的人");
+    const card = (title: string) =>
+      page.locator(".ant-card").filter({ has: page.locator(".ant-card-head-title", { hasText: new RegExp(`^${title}$`) }) });
+    await card("捐款收費").getByRole("spinbutton", { name: "金額" }).fill("500");
+    await card("捐款收費").getByRole("button", { name: "加入本次捐款項目" }).click();
+    await expect(card("捐款收費").getByText("共用的人　一般捐款")).toBeVisible();
+
+    await selectOption(page, "選擇活動", name);
+    await page.getByRole("spinbutton", { name: "金額" }).last().fill("300");
+    await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
+    await expect(page.getByText(`${name}（共用的人）`)).toBeVisible();
+
+    await card("送禮").getByLabel("品項（可複選）").click();
+    await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: "水" }).first().dispatchEvent("click");
+    await page.keyboard.press("Escape");
+    await card("送禮").getByRole("button", { name: "加入本次送禮項目" }).click();
+    await expect(card("送禮").getByText("共用的人　送禮：水x1")).toBeVisible();
+
+    const receipt = await submitAndGetReceipt(page);
+    await expect(receipt.locator("body")).toContainText("共用的人");
+    await expect(receipt.locator("body")).toContainText("NT$ 800");
+
+    // 後端：三種紀錄都記在同一個人名下
+    const report = await api.get(`/ceremony/ceremonies/${ceremony.id}/report`);
+    expect(report.registrations.map((r: { participantName: string }) => r.participantName)).toEqual(["共用的人"]);
+    expect(report.donationTotal).toBe(0); // 這筆捐款沒指定活動
+    // 送出後最上方的報名者會清空，下一位客人重新填
+    await expect(payerCard(page).getByPlaceholder("報名者姓名")).toHaveValue("");
+  });
+
+  test("勾選多人報名：各區塊自己選人，進香可以新增參加者；取消勾選又回到共用", async ({ page, request }) => {
+    const api = await apiAs(request, "director");
+    const name = `多人進香-${Date.now()}`;
+    const ceremony = await api.post("/ceremony/ceremonies", {
+      templeId: await api.templeId(),
+      name,
+      date: futureDate(),
+      feeMode: "FREE_WILL",
+      kind: "PILGRIMAGE",
+      roomTypes: [{ name: "雙人房", capacity: 2, fee: 3000, roomCount: 5 }],
+    });
+
+    await loginWithTemple(page, "volunteer");
+    await openCeremonyRegistration(page, name);
+    await selectOption(page, "房型", "雙人房（NT$ 3000，剩 5 間）");
+    await expect(page.getByRole("button", { name: /新增參加者/ })).toHaveCount(0);
+
+    await checkMulti(page);
+    // 勾選後：進香出現參加者卡片與「新增參加者」，房型選項標出每間人數
+    await expect(page.locator(".ant-card-small", { hasText: "參加者 1" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /新增參加者/ })).toBeVisible();
+    const amount = page.getByRole("spinbutton", { name: "金額" });
+    const p1 = page.locator(".ant-card-small", { hasText: "參加者 1" });
+    await radioButton(p1, "臨櫃香客").click();
+    await p1.getByPlaceholder("姓名").fill("阿土伯");
+    await page.getByRole("button", { name: /新增參加者/ }).click();
+    const p2 = page.locator(".ant-card-small", { hasText: "參加者 2" });
+    await radioButton(p2, "臨櫃香客").click();
+    await p2.getByPlaceholder("姓名").fill("阿土嫂");
+    await expect(amount).toHaveValue("6000"); // 每人 3000 × 2
+    await expect(page.getByRole("button", { name: /新增參加者/ })).toHaveCount(0); // 雙人房已滿 2 人
+    await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
+    await expect(page.getByText(`${name}（雙人房　阿土伯、阿土嫂）`)).toBeVisible();
+    const receipt = await submitAndGetReceipt(page);
+    await expect(receipt.locator("body")).toContainText("雙人房｜阿土伯、阿土嫂");
+
+    const report = await api.get(`/ceremony/ceremonies/${ceremony.id}/report`);
+    expect(report.registrations.map((r: { participantName: string; roomNumber: number }) => [r.participantName, r.roomNumber])).toEqual([
+      ["阿土伯", 1],
+      ["阿土嫂", 1],
+    ]);
+
+    // 取消勾選：回到只填一次
+    await payerCard(page).getByRole("checkbox", { name: "多人報名" }).uncheck();
+    await expect(payerCard(page).getByText("報名者只需要填這一次")).toBeVisible();
+    await expect(page.locator(".ant-card-small", { hasText: "參加者 1" })).toBeHidden();
+  });
+
   test("唯讀帳號可以瀏覽頁面，但送出報名會被擋下", async ({ page, request }) => {
     const api = await apiAs(request, "director");
     const name = `唯讀測試-${Date.now()}`;
@@ -439,8 +535,7 @@ test.describe("活動建立與報名", () => {
 
     await loginWithTemple(page, "viewer");
     await openCeremonyRegistration(page, name);
-    await radioButton(page, "臨櫃香客（免建檔）").click();
-    await page.getByLabel("姓名", { exact: true }).fill("參觀的人");
+    await fillSharedWalkIn(page, "參觀的人");
     await page.getByRole("spinbutton", { name: "金額" }).fill("100");
     await page.getByRole("button", { name: "加入本次活動報名項目" }).click();
     await page.getByRole("button", { name: "送出並開立收據" }).click();
