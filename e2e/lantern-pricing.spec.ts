@@ -1,6 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect, request as playwrightRequest, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { apiAs, fillSharedWalkIn, loginWithTemple } from "./helpers";
+import { apiAs, chooseOption, fillSharedWalkIn, loginWithTemple } from "./helpers";
 
 /**
  * 確認點燈表單選的是這面燈牆：頁面載入時預設選第一面燈牆，而測試資料庫裡可能有好幾面，
@@ -11,14 +11,10 @@ async function selectWall(page: Page, wallName: string) {
   const current = page.locator(".ant-form-item", { has: combobox }).locator(".ant-select-selection-item");
   await expect(current).toBeVisible();
   if ((await current.textContent())?.includes(wallName)) return;
+  // 燈牆選單可以輸入名稱搜尋：直接打字，只剩那一面再選
   await combobox.click({ force: true });
-  await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: wallName }).click();
-}
-
-/** 從目前打開的下拉選單選一項；選項可能被畫面下緣遮住，直接觸發點擊，並等面板關閉再繼續 */
-async function chooseOption(page: Page, text: string) {
-  await page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: text }).first().dispatchEvent("click");
-  await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
+  await combobox.fill(wallName);
+  await chooseOption(page, wallName);
 }
 
 /** 點燈表單第一步：選燈種 */
@@ -193,12 +189,17 @@ test("總幹事在系統設定修改燈種價格：儲存後報名頁立刻用�
     expect(res.status()).toBe(400);
     expect((await res.json()).message).toBe("光明燈每盞 NT$ 700，金額不正確");
   } finally {
-    // 還原成原本的價格，不影響後面的測試
-    const token = await tokenOf(request);
-    await request.put(`http://localhost:3101/api/settings/${templeId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-      data: { lanternTypes: original },
-    });
+    // 還原成原本的價格，不影響後面的測試。用全新的連線：就算這個測試中途逾時、原本的連線已被關掉，也一定還原得了
+    const fresh = await playwrightRequest.newContext();
+    try {
+      const token = await tokenOf(fresh);
+      await fresh.put(`http://localhost:3101/api/settings/${templeId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        data: { lanternTypes: original },
+      });
+    } finally {
+      await fresh.dispose();
+    }
   }
 });
 

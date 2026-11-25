@@ -4,12 +4,13 @@ import { useQuery } from "@tanstack/react-query";
 import { searchHouseholds } from "../api/households";
 
 interface Props {
+  id?: string;
   value?: string;
   onChange?: (householdId: string) => void;
 }
 
 /** 整戶報名等流程使用：透過地址或戶內任一成員姓名搜尋戶籍 */
-export function HouseholdSelect({ value, onChange }: Props) {
+export function HouseholdSelect({ id, value, onChange }: Props) {
   const [keyword, setKeyword] = useState("");
   const query = useQuery({
     queryKey: ["household-select", keyword],
@@ -24,6 +25,7 @@ export function HouseholdSelect({ value, onChange }: Props) {
 
   return (
     <Select
+      id={id}
       showSearch
       value={value}
       placeholder="輸入地址或戶內成員姓名搜尋"

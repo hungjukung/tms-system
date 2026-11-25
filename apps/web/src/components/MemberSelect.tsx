@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { searchMembers } from "../api/households";
 
 interface Props {
+  id?: string;
   value?: string;
   onChange?: (memberId: string) => void;
   /** 選定/清空信徒時一併回傳姓名，供不需要另外查詢的畫面顯示用（例如尚未送出的暫存項目預覽） */
@@ -11,7 +12,7 @@ interface Props {
   style?: CSSProperties;
 }
 
-export function MemberSelect({ value, onChange, onSelectMember, style }: Props) {
+export function MemberSelect({ id, value, onChange, onSelectMember, style }: Props) {
   const [keyword, setKeyword] = useState("");
   // 選定後 antd 會清掉搜尋字，搜尋結果跟著消失；記住已選的那一位，否則欄位會只剩一串 id
   const [chosen, setChosen] = useState<{ value: string; label: string; name: string } | undefined>();
@@ -35,6 +36,7 @@ export function MemberSelect({ value, onChange, onSelectMember, style }: Props) 
 
   return (
     <Select
+      id={id}
       showSearch
       style={style}
       value={value}

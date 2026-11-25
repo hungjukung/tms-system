@@ -998,9 +998,14 @@ function CeremonyRegistrationFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMultiSeatMode, hasRooms, selectedRoom, participantCount]);
 
+  // 最上方的報名者還沒填：「加入」維持可按，按下去會明確提示「請先在最上方選擇報名者」，
+  // 不能讓按鈕變成灰色卻沒有任何說明（使用者只會以為按鈕壞了）
+  const payerPending = !!shared && !shared.ready;
   const readyToAdd =
     !!ceremonyId &&
-    (payerMode === "household"
+    (payerPending
+      ? true
+      : payerMode === "household"
       ? !!householdId && headcount > 0
       : isMultiSeatMode
         ? participantCount > 0 &&
@@ -1233,8 +1238,10 @@ function CeremonyRegistrationFields({
       <Form form={form} name="ceremonyRegistration" layout="vertical">
         <Form.Item label="選擇活動" name="ceremonyId" rules={[{ required: true }]}>
           <Select
-            placeholder="請選擇活動"
-            // 選單只顯示活動名稱（日期、收費方式、名額都不顯示）
+            showSearch
+            optionFilterProp="label"
+            placeholder="請選擇活動（可輸入名稱搜尋）"
+            // 選單只顯示活動名稱（日期、收費方式、名額都不顯示）；活動多的時候可以直接打字找
             options={ceremonies.map((c) => ({ value: c.id, label: c.name }))}
             onChange={(value) => {
               const ceremony = ceremonies.find((c) => c.id === value);
@@ -2012,7 +2019,9 @@ function LanternFields({
         </Form.Item>
         <Form.Item label="燈牆" name="wallId" rules={[{ required: true, message: "請選擇燈牆" }]}>
           <Select
-            placeholder="尚無燈牆，請先新增"
+            showSearch
+            optionFilterProp="label"
+            placeholder="尚無燈牆，請先新增（可輸入名稱搜尋）"
             options={(wallsQuery.data ?? []).map((w) => ({
               value: w.id,
               label: `${w.name}（${w.year}年）${w.isTaisuiWall ? "　太歲燈牆" : ""}`,

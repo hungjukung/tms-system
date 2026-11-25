@@ -71,3 +71,21 @@ export async function fillSharedWalkIn(page: Page, name: string) {
 export async function checkMulti(page: Page) {
   await payerCard(page).getByRole("checkbox", { name: "多人報名" }).check();
 }
+
+/**
+ * 從目前打開的下拉選單選一項。選項很多時 antd 只畫出看得到的那幾個（虛擬捲動），
+ * 沒看到就把清單往下捲到選項出現；選項可能被畫面下緣遮住，所以直接觸發點擊。
+ * 單選選完面板會自動關閉；複選要按 Esc 才會關。
+ */
+export async function chooseOption(page: Page, text: string, opts: { multiple?: boolean } = {}) {
+  const option = page.locator(".ant-select-dropdown:visible .ant-select-item-option", { hasText: text }).first();
+  const holder = page.locator(".ant-select-dropdown:visible .rc-virtual-list-holder");
+  for (let i = 0; i < 60 && (await option.count()) === 0 && (await holder.count()) > 0; i++) {
+    await holder.evaluate((el) => (el.scrollTop += el.clientHeight));
+    await page.waitForTimeout(50);
+  }
+  await option.dispatchEvent("click");
+  if (opts.multiple) await page.keyboard.press("Escape");
+  await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
+}
+
